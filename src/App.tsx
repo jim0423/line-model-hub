@@ -169,6 +169,7 @@ export default function App() {
     }, [activeSessionId]);
 
     useEffect(() => {
+        if (!activeSessionId) return;
         let unlisten: UnlistenFn | undefined;
         listen<UiEvent>(`chat:${activeSessionId}`, (e) => {
             const ev = e.payload;
@@ -232,7 +233,7 @@ export default function App() {
             });
         }).then((u) => (unlisten = u));
         return () => unlisten?.();
-    }, []);
+    }, [activeSessionId]);
 
     const models: ModelInfo[] =
         providers.find((p) => p.id === providerId)?.models ?? [];

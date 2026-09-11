@@ -360,40 +360,91 @@ pub async fn chat(
     let stream = provider.chat(req).await.map_err(|e| e.to_string())?;
     let mut stream = Box::pin(stream);
 
-    // Stream to UI + collect text
-    let mut assistant_text = String::new();
-    let mut reasoning_text = String::new();
-    while let Some(ev) = futures::StreamExt::next(&mut stream).await {
-        match &ev {
-            StreamEvent::Delta { text } => {
-                assistant_text.push_str(text);
-                let _ = app.emit(&format!("chat:{}", args.session_id), UiEventPayload::from(&ev));
-            }
-            StreamEvent::ReasoningDelta { text } => {
-                reasoning_text.push_str(text);
-                let _ = app.emit(&format!("chat:{}", args.session_id), UiEventPayload::from(&ev));
-            }
-            _ => {
-                let _ = app.emit(&format!("chat:{}", args.session_id), UiEventPayload::from(&ev));
-            }
-        }
-        if matches!(ev, StreamEvent::Done { .. } | StreamEvent::Error { .. }) {
-            break;
-        }
+    // Install a cancellation token for this session so cancel_chat can stop us.
+    let cancel_notify = Arc::new(tokio::sync::Notify::new());
+    {
+        let st = state.lock().await;
+        st.cancel
+            .write()
+            .await
+            .insert(args.session_id.clone(), cancel_notify.clone());
     }
 
-    // Append assistant message to history
-    let st = state.lock().await;
-    let mut sessions = st.sessions.write().await;
-    if let Some(session) = sessions.get_mut(&args.session_id) {
-        session.history.push(Message::Assistant {
-            content: if assistant_text.is_empty() { None } else { Some(assistant_text.clone()) },
-            reasoning: if reasoning_text.is_empty() { None } else { Some(reasoning_text) },
-            tool_calls: None,
-        });
-    }
+    // Multi-session support: dispatch the stream into a detached background
+    // task so the UI can switch sessions freely without blocking the chat.
+    // Each session gets its own event channel (`chat:<session_id>`) which the
+    // frontend listens to on demand.
+    let session_id = args.session_id.clone();
+    let provider_id_str = pid_str.clone();
+    let app_clone = app.clone();
+    let state_clone = state.inner().clone();
 
-    Ok(assistant_text)
+    tokio::spawn(async move {
+        let mut assistant_text = String::new();
+        let mut reasoning_text = String::new();
+
+        loop {
+            tokio::select! {
+                _ = cancel_notify.notified() => {
+                    let _ = app_clone.emit(
+                        &format!("chat:{session_id}"),
+                        UiEventPayload::from(&StreamEvent::Error {
+                            message: "cancelled by user".into(),
+                            retriable: false,
+                        }),
+                    );
+                    break;
+                }
+                ev = futures::StreamExt::next(&mut stream) => {
+                    let ev = match ev {
+                        Some(ev) => ev,
+                        None => break,
+                    };
+                    match &ev {
+                        StreamEvent::Delta { text } => assistant_text.push_str(text),
+                        StreamEvent::ReasoningDelta { text } => reasoning_text.push_str(text),
+                        _ => {}
+                    }
+                    let _ = app_clone.emit(
+                        &format!("chat:{session_id}"),
+                        UiEventPayload::from(&ev),
+                    );
+                    if matches!(
+                        ev,
+                        StreamEvent::Done { .. } | StreamEvent::Error { .. }
+                    ) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Persist assistant turn back into the in-memory session history.
+        let st = state_clone.lock().await;
+        let mut sessions = st.sessions.write().await;
+        if let Some(session) = sessions.get_mut(&session_id) {
+            session.history.push(Message::Assistant {
+                content: if assistant_text.is_empty() {
+                    None
+                } else {
+                    Some(assistant_text.clone())
+                },
+                reasoning: if reasoning_text.is_empty() {
+                    None
+                } else {
+                    Some(reasoning_text)
+                },
+                tool_calls: None,
+            });
+        }
+        // Drop the cancellation token for this session — chat is over.
+        let mut cancel = st.cancel.write().await;
+        cancel.remove(&session_id);
+        let _ = provider_id_str; // silence unused warning if future-proofed
+    });
+
+    // Return immediately so the frontend can keep typing / switching sessions.
+    Ok(args.session_id.clone())
 }
 
 #[tauri::command]

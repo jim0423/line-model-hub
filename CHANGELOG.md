@@ -3,6 +3,54 @@
 All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-11
+
+### ✨ New
+
+- **Full Anthropic Claude SSE driver** (`crates/line-hub-core/src/provider/anthropic.rs`)
+  Previously a stub returning "pending v1.1 implementation" — now wires
+  the native `POST /v1/messages` protocol with `x-api-key` and
+  `anthropic-version: 2023-06-01` headers. Translates every Anthropic
+  event type into our `StreamEvent`:
+  - `message_start` → seed usage
+  - `content_block_start` (text) → no-op
+  - `content_block_start` (tool_use) → `ToolCallStart`
+  - `content_block_delta` (text_delta) → `Delta`
+  - `content_block_delta` (input_json_delta) → `ToolCallDelta`
+  - `content_block_delta` (thinking_delta) → `ReasoningDelta`
+  - `message_delta` → merge output_tokens, capture stop_reason
+  - `message_stop` → `Done`
+  Lists `claude-opus-4-5`, `claude-sonnet-4-5` (default),
+  `claude-haiku-4-5`. Maps our wire-format messages to Anthropic's
+  content blocks (system goes to top-level, assistant content becomes
+  text/tool_use array, tool results fold into a user message carrying
+  an array of `tool_result` blocks).
+
+- **Multi-session background chat**
+  `chat` no longer blocks the IPC reply until the stream finishes — it
+  spawns a `tokio::spawn` task per session, returns immediately, and
+  emits events on `chat:<session_id>`. Concretely:
+  - A `tokio::sync::Notify` per session lets `cancel_chat` abort
+    cleanly without dropping the half-streamed response.
+  - The frontend's `listen<UiEvent>(chat:${activeSessionId})` now
+    re-subscribes whenever the active session changes (deps include
+    `activeSessionId`), so events from a different session become
+    invisible until you switch back.
+  - `onCancel` now maps to `cancel_chat(activeSessionId)` instead of
+    the global constant.
+
+### 🧪 Tests
+
+- `crates/line-hub-core/src/provider/anthropic.rs` adds 6 unit tests:
+  - `request_serialises_with_anthropic_shape`
+  - `parses_text_delta_event`
+  - `parses_tool_use_input_json_delta_event`
+  - `parses_thinking_delta_event`
+  - `parses_message_delta_with_stop_reason_and_usage`
+  - `parses_tool_use_block_start`
+
+Total: **22 tests passing** across the workspace.
+
 ## [0.2.1] - 2026-09-11
 
 ### ✨ New
