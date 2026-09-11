@@ -1,0 +1,32 @@
+[package]
+name = "line-hub-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Provider abstraction, SSE streaming, MCP client core for LINE Model Hub"
+
+[dependencies]
+tokio.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+pin-project-lite.workspace = true
+reqwest.workspace = true
+reqwest-eventsource.workspace = true
+eventsource-stream.workspace = true
+bytes.workspace = true
+regex = "1.10"
+async-stream = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dotenvy.workspace = true
+keyring.workspace = true
+aes-gcm.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.40", features = ["full", "test-util"] }
+wiremock = "0.6"

@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    color-scheme: dark;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+body {
+    background: radial-gradient(circle at 20% 0%, #1a2333 0%, #060a16 60%);
+}
+
+.scroll-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 3px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+}

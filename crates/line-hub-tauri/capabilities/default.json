@@ -1,0 +1,27 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability — chat, settings, model picker, send approval.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-set-title",
+    "core:webview:allow-create-webview-window",
+    "dialog:default",
+    "dialog:allow-confirm",
+    "dialog:allow-message",
+    "dialog:allow-ask",
+    "shell:allow-open",
+    "fs:allow-read-text-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$APPDATA/line-model-hub" },
+        { "path": "$APPCONFIG/line-model-hub" },
+        { "path": "$HOME/.line-hub" }
+      ]
+    }
+  ]
+}
