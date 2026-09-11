@@ -55,19 +55,19 @@ jobs:
       - name: List built artefacts
         shell: bash
         run: |
-            echo "==="
-            ls -la crates/line-hub-tauri/target/release/line-model-hub.exe 2>/dev/null || echo "exe missing"
-            echo "==="
-            find crates/line-hub-tauri/target/release/bundle -type f \( -name "*.msi" -o -name "*-setup.exe" \) -exec ls -la {} +
+          echo "==="
+          ls -la target/release/line-model-hub.exe 2>/dev/null || echo "exe missing"
+          echo "==="
+          find target/release/bundle -type f \( -name "*.msi" -o -name "*-setup.exe" \) -exec ls -la {} +
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
           name: line-model-hub-windows
           path: |
-            crates/line-hub-tauri/target/release/line-model-hub.exe
-            crates/line-hub-tauri/target/release/bundle/msi/*.msi
-            crates/line-hub-tauri/target/release/bundle/nsis/*-setup.exe
+            target/release/line-model-hub.exe
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
           retention-days: 14
 
@@ -76,7 +76,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            crates/line-hub-tauri/target/release/line-model-hub.exe
-            crates/line-hub-tauri/target/release/bundle/msi/*.msi
-            crates/line-hub-tauri/target/release/bundle/nsis/*-setup.exe
+            target/release/line-model-hub.exe
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*-setup.exe
           fail_on_unmatched_files: true
