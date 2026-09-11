@@ -1,4 +1,4 @@
-# LINE Model Hub
+# Line 小幫手
 
 > A Windows desktop client that lets you **pick any AI model** (MiniMax M3 by
 > default, OpenAI, Anthropic Claude, or local Ollama) and use it to drive
@@ -30,7 +30,7 @@ model can take the wheel**.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  LINE Model Hub (Tauri 2 desktop app)                      │
+│  Line 小幫手 (Tauri 2 desktop app)                      │
 │                                                            │
 │   ┌─────────────┐   ┌──────────────┐   ┌──────────────┐  │
 │   │ ModelPicker │   │  MCP Bridge  │   │  Chat panel  │  │
@@ -75,7 +75,7 @@ cargo tauri build
 
 ## 🚀 First-run setup
 
-1. Launch the installed `LINE Model Hub`.
+1. Launch the installed `Line 小幫手`.
 2. ⚙ Settings:
    - Paste your **MiniMax** API key (`sk-cp-...`).
    - Set the **LINE Desktop MCP entry path** (e.g.

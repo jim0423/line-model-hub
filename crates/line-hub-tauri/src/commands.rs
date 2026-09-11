@@ -385,26 +385,55 @@ fn which(name: &str) -> Option<String> {
 // Approval dialog (called from conversation loop via custom channel)
 // -------------------------------------------------------------------------
 
-/// Show a native OK/Cancel confirmation dialog before any LINE send.
-pub async fn confirm_send_dialog(
-    app: &AppHandle,
-    chat: &str,
-    message: &str,
-    tool: &str,
-) -> bool {
+/// Frontend-invokable confirmation gate: pops a native OS dialog asking the
+/// user to OK/Cancel before any LINE send-style tool call runs. Returns
+/// `true` only if the user pressed OK.
+///
+/// This is the safety net for the `send_message_auto` /
+/// `send_message_manual` / `send_file_manual` paths. The frontend shows a
+/// `<ToolCard>` for each tool call; when the card detects a send-class
+/// tool it calls this command before letting the tool proceed.
+#[tauri::command]
+pub async fn request_send_confirm(
+    app: AppHandle,
+    args: SendConfirmArgs,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
     let body = format!(
-        "LINE Model Hub wants to call `{tool}`\n\n\
-         Chat: {chat}\n\n\
-         Message:\n{message}\n\n\
-         Press OK to proceed, Cancel to refuse."
+        "Line 小幫手 想要呼叫「{tool}」\n\n\
+         聊天室：{chat}\n\n\
+         訊息：\n{text}\n\n\
+         按「確定」允許送出，按「取消」拒絕。",
+        tool = args.tool,
+        chat = args.chatroom,
+        text = if args.text.chars().count() > 400 {
+            let truncated: String = args.text.chars().take(400).collect();
+            format!("{truncated}…\n（已截斷，共 {} 字）", args.text.chars().count())
+        } else {
+            args.text.clone()
+        },
     );
+
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .message(body)
-        .title("LINE send approval")
+        .title("LINE 訊息送出確認")
         .buttons(MessageDialogButtons::OkCancel)
         .show(move |ok| {
             let _ = tx.send(ok);
         });
-    rx.await.unwrap_or(false)
+    Ok(rx.await.unwrap_or(false))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SendConfirmArgs {
+    pub chatroom: String,
+    pub text: String,
+    #[serde(default = "default_tool_name")]
+    pub tool: String,
+}
+
+fn default_tool_name() -> String {
+    "send_message_auto".to_string()
 }

@@ -1,7 +1,43 @@
 # Changelog
 
-All notable changes to LINE Model Hub are documented here. Versions follow
+All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [0.2.0] - 2026-09-11
+
+### ✨ New
+
+- **Product rename**: 「LINE Model Hub」 → **「Line 小幫手」**.
+  Updated `productName`, app identifier (`com.tt-openclaw.line-xiaobangshou`),
+  window title, all docs, and the in-app header.
+- **Per-tool UI cards** (`ToolCard` + `visualize` in `src/App.tsx`).
+  Each of the 24 line-desktop-mcp tools now renders a distinct icon, accent
+  border, and one-line summary instead of dumping raw JSON. Categories
+  covered: send, draft, history, search/verify, export, file/reply/copy/
+  translate/forward, navigation/status.
+- **Native send-confirm gate** (`request_send_confirm` Tauri command +
+  🛡 button on send-class cards). Before any `send_message_auto`,
+  `send_message_manual`, `send_file_manual`, `set_line_draft`,
+  `clear_line_draft`, `stage_line_reply`, or `stage_line_forward` call,
+  a native OK/Cancel dialog pops with chatroom + message preview. Approval
+  state is recorded on the card (✅ / ❌ / 重設).
+- **Settings dialog hardened**: always renders the four canonical
+  provider rows (MiniMax / OpenAI / Anthropic / Ollama) regardless of
+  whether the backend has pushed entries yet.
+- **Config loader hardened** (`HubConfig::load` now calls
+  `ensure_minimax_default` on both file-missing and JSON-decoded paths).
+- **New tests** (`crates/line-hub-core/tests/config_defaults.rs`):
+  `ensure_minimax_default_adds_minimax_to_empty_config` +
+  `ensure_minimax_default_is_idempotent`.
+
+### 🐛 Fixed
+
+- `spawn_mcp` was ignoring `HubConfig.line_mcp_path` (the value saved
+  from the Settings dialog) — only the `HUB_LINE_MCP_PATH` /
+  `LINE_MODEL_HUB_BUNDLED` env vars were checked. Result: users saw
+  `⚠ set HUB_LINE_MCP_PATH or LINE_MODEL_HUB_BUNDLED` even after pasting
+  the correct path. New priority is env → HubConfig → bundled, with a
+  human-readable error string.
 
 ## [0.1.0] — 2026-09-11
 

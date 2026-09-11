@@ -50,6 +50,21 @@ export const saveConfig = (cfg: HubConfig) =>
 export const mcpStatus = () =>
     invoke<{ providers_loaded: number; active_sessions: number }>("mcp_status");
 
+/**
+ * Pop a native confirmation dialog before sending a LINE message.
+ * Returns `true` only if the user pressed OK in the OS dialog.
+ *
+ * Wired to `request_send_confirm` in crates/line-hub-tauri/src/commands.rs
+ * which uses `tauri-plugin-dialog::ask`. This is the user-facing safety
+ * gate: any AI tool call that wants to deliver text to a real chatroom
+ * must round-trip through here.
+ */
+export const requestSendConfirm = (args: {
+    chatroom: string;
+    text: string;
+    tool?: string;
+}) => invoke<boolean>("request_send_confirm", { args });
+
 export const spawnMcp = () => invoke<ToolDefinition[]>("spawn_mcp");
 
 export const shutdownMcp = () => invoke<void>("shutdown_mcp");

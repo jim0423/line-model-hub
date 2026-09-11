@@ -1,4 +1,4 @@
-# LINE Model Hub — Specification
+# Line 小幫手 — Specification
 
 ## 1. Purpose
 
@@ -46,7 +46,7 @@ only ships a Codex-CLI binding. This tool removes that coupling.
 >
 > Native dialog appears:
 >
->     ⚠ LINE Model Hub wants to call send_message_auto
+>     ⚠ Line 小幫手 wants to call send_message_auto
 >     Chat: 老婆
 >     Message: 今天加班...
 >     [Cancel] [OK]

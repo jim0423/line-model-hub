@@ -1,4 +1,4 @@
-# Building LINE Model Hub on Windows
+# Building Line 小幫手 on Windows
 
 This document covers the complete Windows build pipeline. The Rust core
 (`line-hub-core`, `line-hub-mcp`) compiles anywhere, but the Tauri shell
@@ -50,8 +50,8 @@ After `cargo tauri build` completes (≈ 3-5 min on a clean tree):
 
 ```
 crates/line-hub-tauri\target\release\line-model-hub.exe
-crates/line-hub-tauri\target\release\bundle\msi\LINE Model Hub_0.1.0_x64_en-US.msi
-crates/line-hub-tauri\target\release\bundle\nsis\LINE Model Hub_0.1.0_x64-setup.exe
+crates/line-hub-tauri\target\release\bundle\msi\Line 小幫手_0.1.0_x64_en-US.msi
+crates/line-hub-tauri\target\release\bundle\nsis\Line 小幫手_0.1.0_x64-setup.exe
 ```
 
 Both installers are code-signed with the dev certificate in CI; locally they
@@ -59,7 +59,7 @@ will be unsigned. To sign:
 
 ```powershell
 signtool sign /fd SHA256 /a /tr http://timestamp.digicert.com `
-    "target\release\bundle\msi\LINE Model Hub_0.1.0_x64_en-US.msi"
+    "target\release\bundle\msi\Line 小幫手_0.1.0_x64_en-US.msi"
 ```
 
 ## Bundle config
@@ -106,7 +106,7 @@ Then point Settings at
 
 ## Smoke test after install
 
-1. Launch "LINE Model Hub" from Start menu.
+1. Launch "Line 小幫手" from Start menu.
 2. ⚙ Settings → paste MiniMax API key → Save.
 3. Settings → paste line-desktop-mcp entry path → Save.
 4. Top bar → "Spawn LINE MCP" → expect `LINE MCP · 24`.

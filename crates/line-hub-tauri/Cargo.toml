@@ -3,7 +3,7 @@ name = "line-hub-tauri"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Tauri 2 desktop shell for LINE Model Hub"
+description = "Tauri 2 desktop shell for Line 小幫手"
 
 [lib]
 name = "line_hub_tauri_lib"

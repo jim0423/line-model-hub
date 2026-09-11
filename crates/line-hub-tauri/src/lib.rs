@@ -51,6 +51,7 @@ pub fn run() {
             commands::shutdown_mcp,
             commands::chat,
             commands::cancel_chat,
+            commands::request_send_confirm,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LINE Model Hub");

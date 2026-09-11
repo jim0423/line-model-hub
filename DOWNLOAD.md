@@ -1,4 +1,4 @@
-# 一鍵 build LINE Model Hub Windows installer
+# 一鍵 build Line 小幫手 Windows installer
 
 > 用 GitHub Actions 在雲端 build 出 `.msi` 與 `-setup.exe`，
 > Jim 直接從 **Releases 頁面**下載測試。
@@ -27,8 +27,8 @@ git push -u origin main --tags
 
 ```
 line-model-hub.exe            # 單一執行檔（≈ 8 MB）
-LINE Model Hub_0.1.0_x64_en-US.msi     # WiX 安裝包
-LINE Model Hub_0.1.0_x64-setup.exe    # NSIS 安裝包
+Line 小幫手_0.1.0_x64_en-US.msi     # WiX 安裝包
+Line 小幫手_0.1.0_x64-setup.exe    # NSIS 安裝包
 ```
 
 ### 方式 B：手動 trigger
@@ -46,13 +46,13 @@ LINE Model Hub_0.1.0_x64-setup.exe    # NSIS 安裝包
 
 ```powershell
 # 用 MSI（企業部署）
-msiexec /i "LINE Model Hub_0.1.0_x64_en-US.msi"
+msiexec /i "Line 小幫手_0.1.0_x64_en-US.msi"
 
 # 或 NSIS（個人安裝，推薦）
-.\"LINE Model Hub_0.1.0_x64-setup.exe"
+.\"Line 小幫手_0.1.0_x64-setup.exe"
 
 # 跑起來
-& "C:\Program Files\LINE Model Hub\line-model-hub.exe"
+& "C:\Program Files\Line 小幫手\line-model-hub.exe"
 ```
 
 第一次啟動：

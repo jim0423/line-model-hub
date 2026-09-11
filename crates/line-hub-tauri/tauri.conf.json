@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "LINE Model Hub",
-  "version": "0.1.0",
-  "identifier": "com.tt-openclaw.line-model-hub",
+  "productName": "Line 小幫手",
+  "version": "0.2.0",
+  "identifier": "com.tt-openclaw.line-xiaobangshou",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LINE Model Hub",
+        "title": "Line 小幫手",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
