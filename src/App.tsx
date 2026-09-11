@@ -423,43 +423,53 @@ function SettingsDialog({
     const [keys, setKeys] = useState<Record<string, string>>({});
     const [mcpPath, setMcpPath] = useState("");
 
+    // Always show the four canonical providers even if the Rust backend
+    // hasn't pushed an entry yet — otherwise the user has no way to add
+    // their first API key. See HubConfig::load in crates/line-hub-core.
+    const knownProviders = [
+        { id: "minimax", label: "MiniMax API Key", placeholder: "sk-cp-..." },
+        { id: "openai", label: "OpenAI API Key (optional)", placeholder: "sk-..." },
+        { id: "anthropic", label: "Anthropic API Key (optional)", placeholder: "sk-ant-..." },
+        { id: "ollama", label: "Ollama base URL (optional)", placeholder: "http://localhost:11434/v1" },
+    ];
+
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
             <div className="bg-ink-900 border border-white/10 rounded-xl w-full max-w-lg p-6 space-y-4">
                 <h2 className="text-lg font-semibold">Settings</h2>
-                {cfg?.providers.map((p) => (
-                    <div key={p.id}>
-                        <label className="block text-xs text-white/60 mb-1">
-                            {p.id.toUpperCase()} API Key
-                        </label>
-                        <input
-                            type="password"
-                            value={keys[p.id] ?? ""}
-                            onChange={(e) =>
-                                setKeys((k) => ({
-                                    ...k,
-                                    [p.id]: e.target.value,
-                                }))
-                            }
-                            placeholder={
-                                p.id === "minimax"
-                                    ? "sk-cp-..."
-                                    : p.id === "openai"
-                                      ? "sk-..."
-                                      : p.id === "anthropic"
-                                        ? "sk-ant-..."
-                                        : "(optional)"
-                            }
-                            className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm font-mono"
-                        />
-                    </div>
-                ))}
+                {knownProviders.map((kp) => {
+                    const existing = cfg?.providers.find((p) => p.id === kp.id);
+                    const baseUrl = (existing as any)?.base_url as string | undefined;
+                    return (
+                        <div key={kp.id}>
+                            <label className="block text-xs text-white/60 mb-1">
+                                {kp.label}
+                            </label>
+                            <input
+                                type={kp.id === "ollama" ? "text" : "password"}
+                                value={
+                                    kp.id === "ollama"
+                                        ? (baseUrl ?? keys[kp.id] ?? "")
+                                        : (keys[kp.id] ?? existing?.api_key ?? "")
+                                }
+                                onChange={(e) =>
+                                    setKeys((k) => ({
+                                        ...k,
+                                        [kp.id]: e.target.value,
+                                    }))
+                                }
+                                placeholder={kp.placeholder}
+                                className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm font-mono"
+                            />
+                        </div>
+                    );
+                })}
                 <div>
                     <label className="block text-xs text-white/60 mb-1">
                         line-desktop-mcp entry path (server.js)
                     </label>
                     <input
-                        value={mcpPath}
+                        value={mcpPath || cfg?.line_mcp_path || ""}
                         onChange={(e) => setMcpPath(e.target.value)}
                         placeholder="C:\\Tools\\line-desktop-mcp\\src\\server.js"
                         className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm font-mono"
@@ -473,17 +483,24 @@ function SettingsDialog({
                         Cancel
                     </button>
                     <button
-                        onClick={() =>
-                            onSave({
+                        onClick={() => {
+                            const merged: HubConfig = {
                                 ...(cfg as HubConfig),
                                 providers:
                                     cfg?.providers.map((p) => ({
                                         ...p,
-                                        api_key: keys[p.id] ?? p.api_key,
+                                        api_key:
+                                            keys[p.id] !== undefined
+                                                ? keys[p.id]
+                                                : p.api_key,
+                                        ...(p.id === "ollama" && keys.ollama
+                                            ? { base_url: keys.ollama }
+                                            : {}),
                                     })) ?? [],
-                                line_mcp_path: mcpPath || null,
-                            })
-                        }
+                                line_mcp_path: mcpPath || cfg?.line_mcp_path || null,
+                            };
+                            onSave(merged);
+                        }}
                         className="px-4 py-2 rounded text-sm bg-emerald-500 hover:bg-emerald-400"
                     >
                         Save

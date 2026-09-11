@@ -50,10 +50,13 @@ impl HubConfig {
     pub async fn load() -> HubResult<Self> {
         let path = Self::config_path();
         if !path.exists() {
-            return Ok(Self::default());
+            let mut cfg = Self::default();
+            ensure_minimax_default(&mut cfg);
+            return Ok(cfg);
         }
         let bytes = tokio::fs::read(&path).await?;
-        let cfg: Self = serde_json::from_slice(&bytes)?;
+        let mut cfg: Self = serde_json::from_slice(&bytes)?;
+        ensure_minimax_default(&mut cfg);
         Ok(cfg)
     }
 
