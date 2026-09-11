@@ -164,17 +164,44 @@ pub async fn mcp_status(state: State<'_, Arc<Mutex<AppState>>>) -> Result<serde_
 
 #[tauri::command]
 pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<ToolDefinition>, String> {
-    // Read path from env or fall back to typical Windows install location.
+    use line_hub_core::config::HubConfig;
+
+    // Resolve the line-desktop-mcp entry path with this priority:
+    //   1. `HUB_LINE_MCP_PATH` env var (CI / silent installs)
+    //   2. `line_mcp_path` saved in HubConfig (the Settings dialog field)
+    //   3. `LINE_MODEL_HUB_BUNDLED` env var pointing at a bundled install dir
+    //      (the installer ships node_modules under resources/line-mcp/)
+    //
+    // If none of the three are set, we surface a *human-readable* error to the
+    // UI rather than the cryptic env-var hint.
+    let cfg = HubConfig::load().await.ok();
+    let configured_path = cfg.as_ref().and_then(|c| c.line_mcp_path.clone());
+
     let path = std::env::var("HUB_LINE_MCP_PATH")
         .ok()
+        .or_else(|| configured_path.clone())
         .or_else(|| {
-            // On Windows the bundled resource ships under resources/line-mcp/
             std::env::var("LINE_MODEL_HUB_BUNDLED")
                 .ok()
-                .map(|p| std::path::Path::new(&p).join("src/server.js").to_string_lossy().into_owned())
+                .map(|p| {
+                    std::path::Path::new(&p)
+                        .join("src")
+                        .join("server.js")
+                        .to_string_lossy()
+                        .into_owned()
+                })
         })
-        .ok_or_else(|| "set HUB_LINE_MCP_PATH or LINE_MODEL_HUB_BUNDLED".to_string())?;
-    let node = which_node().ok_or_else(|| "node.exe not found in PATH".to_string())?;
+        .ok_or_else(|| {
+            "Cannot find line-desktop-mcp. Open Settings and paste the path to \
+             line-desktop-mcp\\src\\server.js (or set HUB_LINE_MCP_PATH)."
+                .to_string()
+        })?;
+
+    let node = which_node().ok_or_else(|| {
+        "node.exe not found in PATH. Install Node.js from https://nodejs.org/ \
+         and restart LINE Model Hub."
+            .to_string()
+    })?;
     let mcp = McpClient::spawn(
         &node,
         &path,
