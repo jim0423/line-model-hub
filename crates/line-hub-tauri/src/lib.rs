@@ -57,6 +57,9 @@ pub fn run() {
             commands::delete_history_session,
             commands::load_history_turns,
             commands::append_history_turn,
+            commands::set_provider_keyring_key,
+            commands::list_keyring_providers,
+            commands::delete_provider_keyring_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LINE Model Hub");

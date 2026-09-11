@@ -385,7 +385,7 @@ impl Provider for AnthropicProvider {
 // ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-struct WireChatRequest<'a> {
+pub struct WireChatRequest<'a> {
     model: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<&'a str>,
@@ -398,33 +398,33 @@ struct WireChatRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
-struct WireTool {
+pub struct WireTool {
     name: String,
     description: String,
     input_schema: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
-struct WireMessage {
+pub struct WireMessage {
     role: String,
     content: serde_json::Value,
 }
 
 // `event: message_start`
 #[derive(Debug, Deserialize)]
-struct WireMessageStart {
+pub struct WireMessageStart {
     #[serde(default)]
     message: WireMessageStartInner,
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct WireMessageStartInner {
+pub struct WireMessageStartInner {
     #[serde(default)]
     usage: Option<WireUsageInner>,
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct WireUsageInner {
+pub struct WireUsageInner {
     #[serde(default)]
     input_tokens: Option<u32>,
     #[serde(default)]
@@ -433,14 +433,14 @@ struct WireUsageInner {
 
 // `event: content_block_start`
 #[derive(Debug, Deserialize)]
-struct WireContentBlockStart {
+pub struct WireContentBlockStart {
     index: usize,
     content_block: WireContentBlock,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum WireContentBlock {
+pub enum WireContentBlock {
     Text { text: String },
     ToolUse {
         id: String,
@@ -458,14 +458,14 @@ enum WireContentBlock {
 
 // `event: content_block_delta`
 #[derive(Debug, Deserialize)]
-struct WireContentBlockDelta {
+pub struct WireContentBlockDelta {
     index: usize,
     delta: WireDelta,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum WireDelta {
+pub enum WireDelta {
     TextDelta {
         text: String,
     },
@@ -481,7 +481,7 @@ enum WireDelta {
 
 // `event: message_delta`
 #[derive(Debug, Deserialize)]
-struct WireMessageDelta {
+pub struct WireMessageDelta {
     #[serde(default)]
     delta: WireMessageDeltaInner,
     #[serde(default)]
@@ -489,7 +489,7 @@ struct WireMessageDelta {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct WireMessageDeltaInner {
+pub struct WireMessageDeltaInner {
     #[serde(default)]
     stop_reason: Option<String>,
 }
@@ -497,7 +497,7 @@ struct WireMessageDeltaInner {
 // `event: <type>` — dispatch on the JSON `type` field.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum WireEvent {
+pub enum WireEvent {
     MessageStart {
         #[serde(default)]
         message: WireMessageStartInner,

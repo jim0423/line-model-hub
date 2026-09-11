@@ -3,6 +3,58 @@
 All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-09-11
+
+### ✨ New
+
+- **OS keyring API key storage** (`crates/line-hub-core/src/keyring.rs`)
+  Every API key now lives in the operating system's secret store rather
+  than the on-disk JSON config. Specifically:
+  - Windows → Credential Manager (`wincred`, encrypted via DPAPI)
+  - macOS → Keychain
+  - Linux → Secret Service (gnome-keyring / kwallet)
+  Namespaced under `com.tt-openclaw.line-xiaobangshou` so other apps
+  cannot collide. Three new Tauri commands wire it to the UI:
+  `set_provider_keyring_key`, `list_keyring_providers`,
+  `delete_provider_keyring_key`. Empty-string writes delete the entry.
+
+- **Per-provider recommended `max_tokens`**
+  Anthropic requires an explicit `max_tokens`; previously we hardcoded
+  2048 which truncates long Claude responses mid-stream. New
+  `recommended_max_tokens(provider_id)` returns:
+  - Anthropic → 8192 (Claude Sonnet/Opus budget)
+  - MiniMax / OpenAI → 4096
+  - Ollama → 4096
+  - other → 2048
+
+- **System prompt injection** in `commands.rs::chat`
+  Before the user message lands, we prepend a hub-managed system prompt
+  that primes the model on guardrails, available tool categories, and
+  the active chatroom. Built via `build_system_prompt(tools, active_chat)`
+  using a compact categoriser (`categorize_tool`) so the prompt stays
+  short even with 24 tools loaded.
+
+- **Streaming SQLite flush** in the background `chat` task
+  Every 8 delta events we INSERT OR REPLACE a partial assistant turn
+  into `~/.line-hub/history.sqlite3` using `seq = i64::MAX` as a
+  sentinel. A crash mid-stream now loses at most 8 deltas instead of
+  the entire response.
+
+### 🧪 Tests
+
+- `keyring` adds 4 tests (round-trip / missing-get / missing-delete /
+  list configured).
+- `e2e` integration suite adds 8 tests covering:
+  `config_defaults_inject_minimax`, `history_and_config_coexist`,
+  `anthropic_request_serialises_with_strict_wire_shape`,
+  `anthropic_tool_use_block_serialises_back_to_content_blocks`,
+  `message_enum_round_trip_for_anthropic_style_assistant`,
+  `streaming_fixture_emits_done_after_message_stop`,
+  `user_only_request_serialises_cleanly_through_minimax_path`,
+  `shared_arc_clones`.
+
+Total: **34 tests passing** across the workspace.
+
 ## [0.3.0] - 2026-09-11
 
 ### ✨ New

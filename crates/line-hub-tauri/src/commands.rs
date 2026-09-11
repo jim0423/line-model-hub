@@ -220,6 +220,41 @@ pub async fn append_history_turn(
     st.history.append_turn(&turn).map_err(|e| e.to_string())
 }
 
+// -------------------------------------------------------------------------
+// Secure API key storage (OS keyring)
+// -------------------------------------------------------------------------
+
+/// Store an API key in the OS keyring (Windows Credential Manager / macOS
+/// Keychain / Linux Secret Service). Empty keys delete the entry instead.
+#[tauri::command]
+pub async fn set_provider_keyring_key(
+    provider_id: String,
+    api_key: String,
+) -> Result<(), String> {
+    if api_key.is_empty() {
+        line_hub_core::keyring::delete_api_key(&provider_id)
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    line_hub_core::keyring::set_api_key(&provider_id, &api_key)
+        .map_err(|e| e.to_string())
+}
+
+/// Returns a map of `provider_id -> bool` for the four canonical providers,
+/// where `true` means a credential is currently stored. We do NOT echo the
+/// secret out of the process — only presence/absence.
+#[tauri::command]
+pub async fn list_keyring_providers() -> Result<Vec<String>, String> {
+    Ok(line_hub_core::keyring::list_configured_providers())
+}
+
+/// Explicitly delete a provider's key from the keyring. Useful when the
+/// user wants to wipe a provider from their machine.
+#[tauri::command]
+pub async fn delete_provider_keyring_key(provider_id: String) -> Result<bool, String> {
+    line_hub_core::keyring::delete_api_key(&provider_id).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<ToolDefinition>, String> {
     use line_hub_core::config::HubConfig;
@@ -345,6 +380,17 @@ pub async fn chat(
             provider_id: pid_str.clone(),
         });
     }
+    // Inject the hub-managed system prompt if the caller didn't already
+    // supply one. We prepend it as a fresh `Message::System`; providers
+    // like Anthropic will hoist it to the top-level `system` field on
+    // their next turn. This is the only place we control the model's
+    // behaviour from outside the user's messages.
+    let has_system = history.iter().any(|m| matches!(m, Message::System { .. }));
+    if !has_system {
+        let prompt = build_system_prompt(&tools, None);
+        history.insert(0, Message::System { content: prompt });
+    }
+
     history.push(Message::User {
         content: args.user_input.clone(),
     });
@@ -354,7 +400,7 @@ pub async fn chat(
         messages: history,
         tools,
         temperature: 0.3,
-        max_tokens: Some(2048),
+        max_tokens: recommended_max_tokens(&pid_str),
     };
 
     let stream = provider.chat(req).await.map_err(|e| e.to_string())?;
@@ -382,6 +428,12 @@ pub async fn chat(
     tokio::spawn(async move {
         let mut assistant_text = String::new();
         let mut reasoning_text = String::new();
+        // Streaming persistence — write a partial snapshot every
+        // `STREAM_FLUSH_EVERY` delta events so a crash mid-stream does not
+        // cost the user the whole response. The next flush overwrites via
+        // `append_turn` (INSERT OR REPLACE on (session_id, seq)).
+        const STREAM_FLUSH_EVERY: usize = 8;
+        let mut dirty_events: usize = 0;
 
         loop {
             tokio::select! {
@@ -414,6 +466,28 @@ pub async fn chat(
                         StreamEvent::Done { .. } | StreamEvent::Error { .. }
                     ) {
                         break;
+                    }
+                    // Periodically flush a partial assistant turn to the
+                    // history store so a crash mid-stream does not lose the
+                    // work. We coalesce events to avoid hammering SQLite.
+                    dirty_events += 1;
+                    if dirty_events >= STREAM_FLUSH_EVERY {
+                        dirty_events = 0;
+                        let st_flush = state_clone.lock().await;
+                        let partial = line_hub_core::history::Turn {
+                            session_id: session_id.clone(),
+                            seq: std::i64::MAX, // sentinel — REPLACE wins
+                            role: "assistant".into(),
+                            content: assistant_text.clone(),
+                            reasoning: if reasoning_text.is_empty() {
+                                None
+                            } else {
+                                Some(reasoning_text.clone())
+                            },
+                            tool_trace: None,
+                            ts: chrono::Utc::now().timestamp_millis(),
+                        };
+                        let _ = st_flush.history.append_turn(&partial);
                     }
                 }
             }
@@ -467,6 +541,97 @@ fn parse_pid(s: &str) -> Result<ProviderId, String> {
         "anthropic" => Ok(ProviderId::Anthropic),
         "ollama" => Ok(ProviderId::Ollama),
         other => Err(format!("unknown provider id: {other}")),
+    }
+}
+
+/// Recommended `max_tokens` per provider. Each provider has its own ceiling
+/// — Anthropic demands an explicit value (default 8192), MiniMax / OpenAI
+/// tolerate a more conservative budget, and Ollama depends on the local
+/// model but a sane default of 4096 keeps streaming responsive.
+fn recommended_max_tokens(provider_id: &str) -> Option<u32> {
+    match provider_id {
+        // Anthropic requires an explicit `max_tokens` — pick a generous
+        // budget so we rarely truncate mid-response.
+        "anthropic" => Some(8192),
+        // MiniMax M3 supports up to 32k context; budget for the full
+        // streaming response plus tool calls.
+        "minimax" => Some(4096),
+        // OpenAI defaults to whatever the model thinks is appropriate.
+        "openai" => Some(4096),
+        // Ollama models vary — pick a conservative budget that keeps the
+        // local experience snappy.
+        "ollama" => Some(4096),
+        _ => Some(2048),
+    }
+}
+
+/// Build a compact system prompt that primes the model to use the tools
+/// correctly without burning thousands of input tokens on the full schema.
+///
+/// We deliberately keep this short — the full schemas ride alongside in the
+/// request's `tools` field, so the model only needs to know:
+///   1. The available categories
+///   2. The send-confirm guard exists
+///   3. The chat_id alias for the active chatroom
+fn build_system_prompt(tools: &[ToolDefinition], active_chat: Option<&str>) -> String {
+    let mut cats: Vec<&str> = Vec::new();
+    for t in tools {
+        let cat = categorize_tool(&t.name);
+        if !cats.contains(&cat) {
+            cats.push(cat);
+        }
+    }
+    let cats_list = if cats.is_empty() {
+        "(no tools loaded yet — call get_line_capabilities)".to_string()
+    } else {
+        cats.join(", ")
+    };
+
+    let chat_hint = match active_chat {
+        Some(c) => format!("\n\nActive chatroom: `{c}`. Pass this as `chatroom` for send_* tools unless the user names a different target."),
+        None => "\n\nNo chatroom is currently active in the UI — when the user asks to send something, ask which chatroom first.".to_string(),
+    };
+
+    format!(
+        "You are Line 小幫手, a LINE Desktop assistant.\n\
+         \n\
+         Available tool categories: {cats_list}.\n\
+         \n\
+         Important guardrails:\n\
+         - Any tool whose name starts with `send_`, `stage_`, or overwrites a draft REQUIRES explicit user confirmation before being invoked. The app surfaces a native dialog; never claim a message was sent without seeing a successful tool result.\n\
+         - Read tools (`get_*`, `search_*`, `verify_*`, `copy_*`, `translate_*`) are free to call.\n\
+         - Use `get_line_capabilities` to discover what is currently wired up before relying on a tool.\n\
+         - For bulk operations (export, history lookup) prefer a single tool call over several speculative ones.\n\
+         \n\
+         Respond in the language the user writes in (繁體中文 by default).{chat_hint}"
+    )
+}
+
+fn categorize_tool(name: &str) -> &'static str {
+    if name.starts_with("send_") || name == "stage_line_reply" || name == "stage_line_forward" {
+        "send (guarded)"
+    } else if name.starts_with("set_line_draft")
+        || name == "get_line_draft"
+        || name == "clear_line_draft"
+    {
+        "draft"
+    } else if name.starts_with("export_") {
+        "export"
+    } else if name.starts_with("search_") || name.starts_with("verify_") {
+        "search/verify"
+    } else if name.starts_with("get_line_chat") || name.starts_with("get_line_chatroom_history") {
+        "read history"
+    } else if name.starts_with("copy_")
+        || name.starts_with("translate_")
+        || name.starts_with("send_file_")
+    {
+        "compose"
+    } else if name.starts_with("open_") {
+        "navigate"
+    } else if name.starts_with("get_line_") {
+        "status/capabilities"
+    } else {
+        "other"
     }
 }
 
