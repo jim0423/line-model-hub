@@ -3,6 +3,33 @@
 All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-09-11
+
+### ✨ New
+
+- **Local conversation history** — every turn is now persisted to a
+  SQLite database at `~/.line-hub/history.sqlite3` (in-memory fallback
+  if the disk store fails to open). Closing and relaunching the app
+  restores the conversation exactly as you left it.
+- **Session sidebar** — the left rail now lists every saved conversation,
+  newest first. Click to switch; hover to rename (✎) or delete (×).
+  Brand-new sessions are created with the `+ 新對話` button.
+- **5 new Tauri commands** wired to the history store:
+  `list_history_sessions`, `load_history_turns`, `append_history_turn`,
+  `rename_history_session`, `delete_history_session`.
+- **Cancel streaming button** — the chat footer's send button flips to
+  `Cancel` while a response is in flight. Pressing it calls
+  `cancel_chat` and stops the SSE stream cleanly.
+- **`HistoryStore::open_in_memory`** — graceful fallback so a broken
+  on-disk store does not crash startup.
+
+### 🧪 Tests
+
+- `crates/line-hub-core/src/history.rs` adds 3 unit tests:
+  - `append_and_load_round_trip`
+  - `list_sessions_orders_by_updated_at_desc`
+  - `delete_session_cascades_turns`
+
 ## [0.2.0] - 2026-09-11
 
 ### ✨ New

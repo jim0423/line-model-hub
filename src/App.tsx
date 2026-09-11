@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import {
+    appendHistoryTurn,
     cancelChat,
     chat,
+    deleteHistorySession,
     HubConfig,
+    HistorySession,
+    HistoryTurn,
+    listHistorySessions,
     listProviders,
+    loadHistoryTurns,
     ModelInfo,
     ProviderSummary,
+    renameHistorySession,
     requestSendConfirm,
     saveConfig,
     spawnMcp,
@@ -50,7 +57,61 @@ interface ToolCallTrace {
     blocked?: boolean;
 }
 
-const SESSION = "default";
+const SESSION_PREFIX = "s";
+
+/** Generate a session id with a tiny prefix so the default sidebar title
+ *  is human-friendly without forcing a rename. */
+function newSessionId(): string {
+    return `${SESSION_PREFIX}-${Date.now().toString(36)}-${Math.floor(
+        Math.random() * 1000
+    )
+        .toString(36)
+        .padStart(2, "0")}`;
+}
+
+function historyTurnToMessage(t: HistoryTurn): TurnMessage {
+    let toolTrace: ToolCallTrace[] | undefined;
+    if (t.tool_trace) {
+        try {
+            const parsed = JSON.parse(t.tool_trace);
+            if (Array.isArray(parsed)) toolTrace = parsed as ToolCallTrace[];
+        } catch {
+            toolTrace = undefined;
+        }
+    }
+    return {
+        role: t.role === "assistant" ? "assistant" : "user",
+        content: t.content,
+        reasoning: t.reasoning ?? undefined,
+        toolTrace,
+        partial: false,
+    };
+}
+
+async function persistTurn(
+    sessionId: string,
+    role: string,
+    content: string,
+    reasoning: string | undefined,
+    toolTrace: ToolCallTrace[] | undefined,
+    seqHint?: number,
+): Promise<void> {
+    try {
+        const turn: HistoryTurn = {
+            session_id: sessionId,
+            seq: seqHint ?? Date.now(), // unique-ish; the seq column is for ordering not PK
+            role,
+            content,
+            reasoning: reasoning ?? null,
+            tool_trace: toolTrace ? JSON.stringify(toolTrace) : null,
+            ts: Date.now(),
+        };
+        await appendHistoryTurn(turn);
+    } catch (e) {
+        // Persistence is best-effort — chat still works without it.
+        console.warn("history persist failed:", e);
+    }
+}
 
 export default function App() {
     const [providers, setProviders] = useState<ProviderSummary[]>([]);
@@ -62,6 +123,13 @@ export default function App() {
     const [error, setError] = useState<string | null>(null);
     const [mcpTools, setMcpTools] = useState<string[]>([]);
     const [showSettings, setShowSettings] = useState(false);
+    const [sessions, setSessions] = useState<HistorySession[]>([]);
+    const [activeSessionId, setActiveSessionId] = useState<string>(() =>
+        newSessionId()
+    );
+    const [seq, setSeq] = useState(0); // next seq for this session
+    const [renamingId, setRenamingId] = useState<string | null>(null);
+    const [renameDraft, setRenameDraft] = useState("");
 
     useEffect(() => {
         listProviders()
@@ -77,9 +145,32 @@ export default function App() {
             .catch((e) => setError(String(e)));
     }, []);
 
+    // Initial session load: fetch the sidebar list and the active session's
+    // turns. If the active session is brand-new, an empty list is fine.
+    useEffect(() => {
+        listHistorySessions()
+            .then((rows) => {
+                setSessions(rows);
+                if (rows.length > 0 && !rows.some((s) => s.id === activeSessionId)) {
+                    setActiveSessionId(rows[0].id);
+                }
+            })
+            .catch((e) => console.warn("history list failed:", e));
+    }, []);
+
+    useEffect(() => {
+        if (!activeSessionId) return;
+        loadHistoryTurns(activeSessionId)
+            .then((rows) => {
+                setTurns(rows.map(historyTurnToMessage));
+                setSeq(rows.length);
+            })
+            .catch((e) => console.warn("history load failed:", e));
+    }, [activeSessionId]);
+
     useEffect(() => {
         let unlisten: UnlistenFn | undefined;
-        listen<UiEvent>(`chat:${SESSION}`, (e) => {
+        listen<UiEvent>(`chat:${activeSessionId}`, (e) => {
             const ev = e.payload;
             setTurns((prev) => {
                 const next = [...prev];
@@ -157,9 +248,16 @@ export default function App() {
             { role: "user", content: userText },
             { role: "assistant", content: "", toolTrace: [], partial: true },
         ]);
+        // Best-effort persist the user turn so refresh / relaunch preserves it.
+        const userSeq = seq;
+        const assistantSeq = seq + 1;
+        setSeq((s) => s + 2);
+        persistTurn(activeSessionId, "user", userText, undefined, undefined, userSeq);
+        // Refresh sidebar so the new (or bumped) session rises to the top.
+        listHistorySessions().then(setSessions).catch(() => undefined);
         try {
             await chat({
-                session_id: SESSION,
+                session_id: activeSessionId,
                 user_input: userText,
                 provider_id: providerId,
                 model,
@@ -171,7 +269,7 @@ export default function App() {
     };
 
     const onCancel = async () => {
-        await cancelChat(SESSION);
+        await cancelChat(activeSessionId);
         setSending(false);
     };
 
@@ -182,6 +280,67 @@ export default function App() {
         } catch (e: any) {
             setError(String(e));
         }
+    };
+
+    // When an assistant turn finishes, persist it. We watch the last turn:
+    // when its `partial` flips from true to false, capture and store it.
+    useEffect(() => {
+        const last = turns[turns.length - 1];
+        if (!last || last.role !== "assistant" || last.partial) return;
+        if (!last.content && !last.reasoning && !last.toolTrace?.length) return;
+        persistTurn(
+            activeSessionId,
+            "assistant",
+            last.content,
+            last.reasoning,
+            last.toolTrace,
+            seq - 1
+        );
+        // bump the sidebar order
+        listHistorySessions().then(setSessions).catch(() => undefined);
+    }, [turns]);
+
+    const onNewSession = () => {
+        const id = newSessionId();
+        setActiveSessionId(id);
+        setTurns([]);
+        setSeq(0);
+        setSessions((rows) => [{ id, title: `對話 ${id.slice(2, 6)}`, created_at: Date.now(), updated_at: Date.now() }, ...rows]);
+    };
+
+    const onSwitchSession = (id: string) => {
+        if (id === activeSessionId || sending) return;
+        setActiveSessionId(id);
+    };
+
+    const onDeleteSession = async (id: string) => {
+        try {
+            await deleteHistorySession(id);
+            const rows = await listHistorySessions();
+            setSessions(rows);
+            if (id === activeSessionId) {
+                const next = rows[0]?.id ?? newSessionId();
+                setActiveSessionId(next);
+                setTurns([]);
+                setSeq(0);
+            }
+        } catch (e) {
+            setError(String(e));
+        }
+    };
+
+    const onCommitRename = async () => {
+        if (!renamingId) return;
+        const title = renameDraft.trim() || `對話 ${renamingId.slice(2, 6)}`;
+        try {
+            await renameHistorySession(renamingId, title);
+            const rows = await listHistorySessions();
+            setSessions(rows);
+        } catch (e) {
+            setError(String(e));
+        }
+        setRenamingId(null);
+        setRenameDraft("");
     };
 
     const onSaveSettings = async (cfg: HubConfig) => {
@@ -196,11 +355,93 @@ export default function App() {
     };
 
     return (
-        <div className="h-full flex flex-col">
-            <header className="border-b border-white/10 px-6 py-3 flex items-center gap-4">
-                <div className="text-lg font-semibold tracking-tight">
-                    Line 小幫手
+        <div className="h-full flex">
+            {/* Sidebar — conversation history */}
+            <aside className="w-60 border-r border-white/10 bg-black/20 flex flex-col">
+                <button
+                    onClick={onNewSession}
+                    className="m-2 px-3 py-2 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 text-sm font-medium"
+                >
+                    + 新對話
+                </button>
+                <div className="flex-1 overflow-auto scroll-thin px-1 py-1 space-y-1">
+                    {sessions.length === 0 && (
+                        <div className="px-3 py-2 text-white/40 text-xs">
+                            尚無對話
+                        </div>
+                    )}
+                    {sessions.map((s) => (
+                        <div
+                            key={s.id}
+                            className={`group rounded px-2 py-1.5 text-sm cursor-pointer flex items-center gap-1 ${
+                                s.id === activeSessionId
+                                    ? "bg-emerald-500/15 text-emerald-200"
+                                    : "hover:bg-white/5 text-white/80"
+                            }`}
+                            onClick={() => onSwitchSession(s.id)}
+                        >
+                            {renamingId === s.id ? (
+                                <input
+                                    autoFocus
+                                    value={renameDraft}
+                                    onChange={(e) =>
+                                        setRenameDraft(e.target.value)
+                                    }
+                                    onBlur={onCommitRename}
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter")
+                                            onCommitRename();
+                                        if (e.key === "Escape") {
+                                            setRenamingId(null);
+                                            setRenameDraft("");
+                                        }
+                                    }}
+                                    className="flex-1 bg-white/10 rounded px-1.5 py-0.5 text-xs"
+                                />
+                            ) : (
+                                <>
+                                    <span className="flex-1 truncate">
+                                        {s.title}
+                                    </span>
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setRenamingId(s.id);
+                                            setRenameDraft(s.title);
+                                        }}
+                                        className="opacity-0 group-hover:opacity-100 text-white/40 hover:text-white/70 text-xs"
+                                        title="改名"
+                                    >
+                                        ✎
+                                    </button>
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (
+                                                confirm(
+                                                    `確定刪除「${s.title}」？此動作無法復原。`
+                                                )
+                                            )
+                                                onDeleteSession(s.id);
+                                        }}
+                                        className="opacity-0 group-hover:opacity-100 text-white/40 hover:text-rose-400 text-xs"
+                                        title="刪除"
+                                    >
+                                        ×
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    ))}
                 </div>
+            </aside>
+
+            {/* Main chat panel */}
+            <div className="flex-1 flex flex-col">
+                <header className="border-b border-white/10 px-6 py-3 flex items-center gap-4">
+                    <div className="text-lg font-semibold tracking-tight">
+                        Line 小幫手
+                    </div>
                 <select
                     className="bg-white/5 border border-white/10 rounded px-2 py-1 text-sm"
                     value={providerId}
@@ -330,6 +571,7 @@ export default function App() {
                     onSave={onSaveSettings}
                 />
             )}
+            </div>
         </div>
     );
 }

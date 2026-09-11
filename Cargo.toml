@@ -45,6 +45,10 @@ dotenvy = "0.15"
 keyring = { version = "3.6", features = ["windows-native", "apple-native", "linux-native-sync-persistent"] }
 aes-gcm = "0.10"
 
+# Local persistence
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+
 # MCP protocol (JSON-RPC)
 jsonrpc-core = "18.0"
 

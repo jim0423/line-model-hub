@@ -50,6 +50,39 @@ export const saveConfig = (cfg: HubConfig) =>
 export const mcpStatus = () =>
     invoke<{ providers_loaded: number; active_sessions: number }>("mcp_status");
 
+export const appendHistoryTurn = (turn: HistoryTurn) =>
+    invoke<void>("append_history_turn", { turn });
+
+export const listHistorySessions = () =>
+    invoke<HistorySession[]>("list_history_sessions");
+
+export const loadHistoryTurns = (sessionId: string) =>
+    invoke<HistoryTurn[]>("load_history_turns", { sessionId });
+
+export const renameHistorySession = (sessionId: string, title: string) =>
+    invoke<void>("rename_history_session", { sessionId, title });
+
+export const deleteHistorySession = (sessionId: string) =>
+    invoke<void>("delete_history_session", { sessionId });
+
+// History row shapes — mirror `line_hub_core::history`.
+export interface HistoryTurn {
+    session_id: string;
+    seq: number;
+    role: string;
+    content: string;
+    reasoning?: string | null;
+    tool_trace?: string | null;
+    ts: number;
+}
+
+export interface HistorySession {
+    id: string;
+    title: string;
+    created_at: number;
+    updated_at: number;
+}
+
 /**
  * Pop a native confirmation dialog before sending a LINE message.
  * Returns `true` only if the user pressed OK in the OS dialog.

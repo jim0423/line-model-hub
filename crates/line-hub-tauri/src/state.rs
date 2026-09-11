@@ -1,5 +1,6 @@
 //! Shared application state held inside Tauri's State container.
 
+use line_hub_core::history::HistoryStore;
 use line_hub_core::mcp::McpTool;
 use line_hub_core::provider::{ChatRequest, Provider, StreamEvent};
 use std::collections::HashMap;
@@ -15,15 +16,28 @@ pub struct AppState {
     pub sessions: RwLock<HashMap<String, ChatSession>>,
     /// Cancellation tokens per session.
     pub cancel: RwLock<HashMap<String, Arc<tokio::sync::Notify>>>,
+    /// Local SQLite-backed history store. Initialised at boot; if open
+    /// fails (e.g. read-only filesystem) we substitute an in-memory store
+    /// so the rest of the app keeps working.
+    pub history: HistoryStore,
 }
 
 impl AppState {
     pub fn new() -> Self {
+        let history = HistoryStore::open().unwrap_or_else(|err| {
+            tracing::warn!(
+                "history store at ~/.line-hub/history.sqlite3 failed to open ({err}); \
+                 falling back to in-memory store"
+            );
+            HistoryStore::open_in_memory()
+                .expect("in-memory history store cannot fail to open")
+        });
         Self {
             providers: RwLock::new(HashMap::new()),
             mcp: RwLock::new(None),
             sessions: RwLock::new(HashMap::new()),
             cancel: RwLock::new(HashMap::new()),
+            history,
         }
     }
 }

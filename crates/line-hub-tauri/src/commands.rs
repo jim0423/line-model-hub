@@ -162,6 +162,64 @@ pub async fn mcp_status(state: State<'_, Arc<Mutex<AppState>>>) -> Result<serde_
     }))
 }
 
+// -------------------------------------------------------------------------
+// History (local SQLite-backed turn log)
+// -------------------------------------------------------------------------
+
+/// List every session in the history store, newest first.
+#[tauri::command]
+pub async fn list_history_sessions(
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<Vec<line_hub_core::history::Session>, String> {
+    let st = state.lock().await;
+    st.history.list_sessions().map_err(|e| e.to_string())
+}
+
+/// Rename a session in the sidebar.
+#[tauri::command]
+pub async fn rename_history_session(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    session_id: String,
+    title: String,
+) -> Result<(), String> {
+    let st = state.lock().await;
+    st.history
+        .rename_session(&session_id, &title)
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a session and all of its turns.
+#[tauri::command]
+pub async fn delete_history_session(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    session_id: String,
+) -> Result<(), String> {
+    let st = state.lock().await;
+    st.history
+        .delete_session(&session_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Load every turn for a session in order.
+#[tauri::command]
+pub async fn load_history_turns(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    session_id: String,
+) -> Result<Vec<line_hub_core::history::Turn>, String> {
+    let st = state.lock().await;
+    st.history.load_turns(&session_id).map_err(|e| e.to_string())
+}
+
+/// Append one turn to a session.
+#[tauri::command]
+pub async fn append_history_turn(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    turn: line_hub_core::history::Turn,
+) -> Result<(), String> {
+    let st = state.lock().await;
+    st.history.append_turn(&turn).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<ToolDefinition>, String> {
     use line_hub_core::config::HubConfig;

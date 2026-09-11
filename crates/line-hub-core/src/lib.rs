@@ -10,6 +10,7 @@
 pub mod config;
 pub mod conversation;
 pub mod error;
+pub mod history;
 pub mod mcp;
 pub mod provider;
 pub mod sse;

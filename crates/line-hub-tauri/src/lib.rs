@@ -52,6 +52,11 @@ pub fn run() {
             commands::chat,
             commands::cancel_chat,
             commands::request_send_confirm,
+            commands::list_history_sessions,
+            commands::rename_history_session,
+            commands::delete_history_session,
+            commands::load_history_turns,
+            commands::append_history_turn,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LINE Model Hub");
