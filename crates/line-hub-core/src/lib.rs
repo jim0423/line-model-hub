@@ -15,5 +15,6 @@ pub mod keyring;
 pub mod mcp;
 pub mod provider;
 pub mod sse;
+pub mod tz;
 
 pub use error::{HubError, HubResult};

@@ -3,7 +3,7 @@
 //! Drives the provider ↔ MCP tool ↔ provider cycle with bounded depth and
 //! a mandatory human-approval gate before any tool that sends a message.
 
-use crate::mcp::{McpTool, ToolRegistry};
+use crate::mcp::{McpTool, ToolRegistry, ToolResult, ToolResultBlock};
 use crate::provider::{ChatRequest, Message, Provider, StreamEvent, ToolCall, ToolDefinition};
 use crate::{HubError, HubResult};
 use async_trait::async_trait;
@@ -59,9 +59,22 @@ pub enum UiEvent {
     /// A tool call started; the UI may show "🔧 {name}" with args accumulating.
     ToolStart { id: String, name: String, args_preview: String },
     /// Tool call arguments complete; result is being awaited.
-    ToolArgs { id: String, args: serde_json::Value },
-    /// Tool call finished with result text (truncated for UI).
-    ToolDone { id: String, name: String, result_preview: String },
+    /// `attachment_count` is the number of previews already attached to
+    /// the args payload (so the UI can render a 📎 badge before decoding).
+    ToolArgs {
+        id: String,
+        args: serde_json::Value,
+        attachment_count: usize,
+    },
+    /// Tool call finished. `attachments` carries the typed content blocks
+    /// (text / image / audio / unsupported) so the UI can render each one
+    /// without first re-parsing the preview text.
+    ToolDone {
+        id: String,
+        name: String,
+        result_preview: String,
+        attachments: Vec<ToolResultBlock>,
+    },
     /// A send was blocked by the guard.
     SendBlocked { chat: String, message: String },
     /// Final assistant turn complete.
@@ -91,7 +104,7 @@ pub async fn run_turn<P, G, S>(
     mut on_event: S,
 ) -> HubResult<String>
 where
-    P: Provider,
+    P: Provider + ?Sized,
     G: SendGuard,
     S: FnMut(UiEvent) + Send,
 {
@@ -194,6 +207,11 @@ where
             on_event(UiEvent::ToolArgs {
                 id,
                 args: parsed.clone(),
+                // Args themselves carry no inline attachments today —
+                // any image / audio previews surface via ToolDone's
+                // `attachments` field. The UI uses 0 to know it should
+                // expect the badge to light up later.
+                attachment_count: 0,
             });
         }
 
@@ -254,19 +272,65 @@ where
                 }
             }
 
-            // Invoke tool
-            let result = mcp.call_tool(&tc.function.name, args_json.clone()).await;
-            let result_str = match &result {
-                Ok(v) => serde_json::to_string(v)?,
+            // Invoke tool — use the structured path so image / audio
+            // previews ride through as typed blocks rather than a flat
+            // text blob.
+            let tool_result = mcp
+                .call_tool_structured(&tc.function.name, args_json.clone())
+                .await;
+
+            // Materialise the result. On error we still emit a `ToolDone`
+            // with no attachments and surface the message as `Error` so
+            // the UI can keep its tool card visible.
+            let (result_str, attachments) = match &tool_result {
+                Ok(ToolResult::Ok { blocks }) => {
+                    let preview_blocks: Vec<ToolResultBlock> = blocks.clone();
+                    let str_repr = serde_json::to_string(
+                        &blocks
+                            .iter()
+                            .map(|b| match b {
+                                ToolResultBlock::Text { text } => {
+                                    serde_json::json!({"kind": "text", "text": text})
+                                }
+                                ToolResultBlock::Image { mime_type, .. } => {
+                                    serde_json::json!({"kind": "image", "mime_type": mime_type})
+                                }
+                                ToolResultBlock::Audio { mime_type, .. } => {
+                                    serde_json::json!({"kind": "audio", "mime_type": mime_type})
+                                }
+                                ToolResultBlock::Unsupported { mime_type, note } => {
+                                    serde_json::json!({"kind": "unsupported", "mime_type": mime_type, "note": note})
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    )?;
+                    (str_repr, preview_blocks)
+                }
+                Ok(ToolResult::Err { message }) => {
+                    on_event(UiEvent::Error(format!(
+                        "{} failed: {}",
+                        tc.function.name, message
+                    )));
+                    (
+                        serde_json::to_string(&serde_json::json!({
+                            "error": message,
+                            "code": "TOOL_EXEC_FAILED"
+                        }))?,
+                        Vec::new(),
+                    )
+                }
                 Err(e) => {
                     on_event(UiEvent::Error(format!(
                         "{} failed: {}",
                         tc.function.name, e
                     )));
-                    serde_json::to_string(&serde_json::json!({
-                        "error": e.to_string(),
-                        "code": "TOOL_EXEC_FAILED"
-                    }))?
+                    (
+                        serde_json::to_string(&serde_json::json!({
+                            "error": e.to_string(),
+                            "code": "TOOL_EXEC_FAILED"
+                        }))?,
+                        Vec::new(),
+                    )
                 }
             };
 
@@ -279,6 +343,7 @@ where
                 id: tc.id.clone(),
                 name: tc.function.name.clone(),
                 result_preview: preview,
+                attachments,
             });
 
             history.push(Message::Tool {

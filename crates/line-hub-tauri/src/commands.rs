@@ -2,7 +2,8 @@
 
 use crate::state::AppState;
 use line_hub_core::config::{HubConfig, ProviderEntry};
-use line_hub_core::mcp::{McpClient, McpTool};
+use line_hub_core::conversation::{self, LoopConfig, SendGuard, UiEvent};
+use line_hub_core::mcp::{McpClient, McpTool, ToolResult, ToolResultBlock};
 use line_hub_core::provider::{
     ChatRequest, Message, ModelInfo, Provider, ProviderId, StreamEvent, ToolDefinition,
 };
@@ -33,14 +34,86 @@ pub struct ChatArgs {
     pub model: Option<String>,
 }
 
+/// Attachment block surfaced to the UI from a tool call's response.
+///
+/// We mirror the [`ToolResultBlock`] shape but serialise image bytes as
+/// a base64 data-URL so Tauri's Tauri event channel can carry them to
+/// the React frontend without any extra file:// plumbing on the way.
+/// The frontend reverses the encoding back into `<img src=...>`.
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UiAttachment {
+    Text {
+        text: String,
+    },
+    Image {
+        /// data: URL — `data:image/png;base64,XXXX`.
+        src: String,
+        mime_type: String,
+        bytes: usize,
+    },
+    Audio {
+        src: String,
+        mime_type: String,
+        bytes: usize,
+    },
+    Unsupported {
+        mime_type: String,
+        note: String,
+    },
+}
+
+impl From<&ToolResultBlock> for UiAttachment {
+    fn from(b: &ToolResultBlock) -> Self {
+        match b {
+            ToolResultBlock::Text { text } => Self::Text { text: text.clone() },
+            ToolResultBlock::Image { mime_type, data } => {
+                use base64::engine::general_purpose::STANDARD;
+                use base64::Engine;
+                let encoded = STANDARD.encode(data);
+                Self::Image {
+                    src: format!("data:{mime_type};base64,{encoded}"),
+                    mime_type: mime_type.clone(),
+                    bytes: data.len(),
+                }
+            }
+            ToolResultBlock::Audio { mime_type, data } => {
+                use base64::engine::general_purpose::STANDARD;
+                use base64::Engine;
+                let encoded = STANDARD.encode(data);
+                Self::Audio {
+                    src: format!("data:{mime_type};base64,{encoded}"),
+                    mime_type: mime_type.clone(),
+                    bytes: data.len(),
+                }
+            }
+            ToolResultBlock::Unsupported { mime_type, note } => Self::Unsupported {
+                mime_type: mime_type.clone(),
+                note: note.clone(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UiEventPayload {
     Delta { text: String },
     Reasoning { text: String },
     ToolStart { id: String, name: String, args_preview: String },
-    ToolArgs { id: String, args: serde_json::Value },
-    ToolDone { id: String, name: String, result_preview: String },
+    ToolArgs {
+        id: String,
+        args: serde_json::Value,
+        /// Number of attachments the model received. Surfaced so the
+        /// UI can show a 📎 badge before any decoding happens.
+        attachment_count: usize,
+    },
+    ToolDone {
+        id: String,
+        name: String,
+        result_preview: String,
+        attachments: Vec<UiAttachment>,
+    },
     SendBlocked { chat: String, message: String },
     Done,
     Error { message: String },
@@ -307,7 +380,7 @@ pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<Too
     .map_err(|e| e.to_string())?;
     let tools = mcp.list_tools().await.map_err(|e| e.to_string())?;
     let mut st = state.lock().await;
-    *st.mcp.write().await = Some(Arc::new(Mutex::new(Box::new(mcp))));
+    *st.mcp.write().await = Some(Arc::new(mcp) as Arc<dyn McpTool>);
     Ok(tools)
 }
 
@@ -316,9 +389,44 @@ pub async fn shutdown_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<(), 
     let st = state.lock().await;
     let mut guard = st.mcp.write().await;
     if let Some(mcp) = guard.take() {
-        mcp.lock().await.shutdown().await;
+        mcp.shutdown().await;
     }
     Ok(())
+}
+
+/// Thin wrapper around the `get_line_capabilities` MCP tool.
+///
+/// Called by the frontend right after `spawn_mcp` succeeds to render a
+/// "LINE feature map" card (which tools can run on this LINE build, which
+/// require the optional `LINE_MCP_CUA_DRIVER` / `LINE_MCP_PYTHON` deps,
+/// which are explicitly unavailable on the current platform, etc.). The
+/// MCP tool itself is read-only and listed by default in v3.0.0, so it's
+/// safe to call as the very first interaction after spawn.
+///
+/// Falls back to a synthetic unavailable payload if the MCP child is not
+/// running, which lets the UI show a "spawn MCP first" hint without
+/// crashing on cold start.
+#[tauri::command]
+pub async fn fetch_capabilities(
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<serde_json::Value, String> {
+    let st = state.lock().await;
+    let guard = st.mcp.read().await;
+    let Some(mcp_arc) = guard.as_ref().cloned() else {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "code": "LINE_MCP_NOT_SPAWNED",
+            "note": "Spawn LINE MCP first.",
+        }));
+    };
+    // Drop the read lock before the await so a long-running MCP call does
+    // not block other readers (e.g. `chat()` cloning its own snapshot).
+    drop(guard);
+    let raw = mcp_arc
+        .call_tool("get_line_capabilities", serde_json::json!({"mode": "all"}))
+        .await
+        .map_err(|e| format!("get_line_capabilities failed: {e}"))?;
+    Ok(raw)
 }
 
 #[tauri::command]
@@ -327,6 +435,7 @@ pub async fn chat(
     state: State<'_, Arc<Mutex<AppState>>>,
     args: ChatArgs,
 ) -> Result<String, String> {
+    // -- Resolve provider / model ---------------------------------------
     let cfg = HubConfig::load().await.map_err(|e| e.to_string())?;
     let pid_str = args
         .provider_id
@@ -353,32 +462,42 @@ pub async fn chat(
         ProviderId::Ollama => Arc::new(line_hub_core::provider::OllamaProvider::new(&entry).map_err(|e| e.to_string())?),
     };
 
-    // Get MCP tools if available
-    let tools: Vec<ToolDefinition> = {
+    // -- Snapshot the MCP client (if any) -------------------------------
+    // run_turn needs `&Arc<dyn McpTool>`, so we clone the Arc out of the
+    // state lock before any await. If no MCP has been spawned, we fall
+    // back to a no-op proxy that returns an empty tool list — the
+    // conversation loop then degenerates to a single non-agentic turn,
+    // which matches the v0.4.0 behaviour when no MCP was running.
+    let mcp_arc: Arc<dyn McpTool> = {
         let st = state.lock().await;
         let guard = st.mcp.read().await;
-        if let Some(mcp) = guard.as_ref() {
-            mcp.lock().await.list_tools().await.unwrap_or_default()
-        } else {
-            Vec::new()
-        }
+        guard
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(NoopMcp) as Arc<dyn McpTool>)
     };
 
-    // Build conversation with history from session
+    // -- Conversation history + system prompt ---------------------------
     let mut history: Vec<Message> = {
         let st = state.lock().await;
         let sessions = st.sessions.read().await;
-        sessions.get(&args.session_id).map(|s| s.history.clone()).unwrap_or_default()
+        sessions
+            .get(&args.session_id)
+            .map(|s| s.history.clone())
+            .unwrap_or_default()
     };
     if history.is_empty() {
-        // Lazily create the session record on first use.
-        let mut st = state.lock().await;
+        // Lazily create the session record on first use so the model
+        // and provider are remembered for the next turn.
+        let st = state.lock().await;
         let mut sessions = st.sessions.write().await;
-        sessions.entry(args.session_id.clone()).or_insert_with(|| crate::state::ChatSession {
-            history: Vec::new(),
-            model: model.clone(),
-            provider_id: pid_str.clone(),
-        });
+        sessions
+            .entry(args.session_id.clone())
+            .or_insert_with(|| crate::state::ChatSession {
+                history: Vec::new(),
+                model: model.clone(),
+                provider_id: pid_str.clone(),
+            });
     }
     // Inject the hub-managed system prompt if the caller didn't already
     // supply one. We prepend it as a fresh `Message::System`; providers
@@ -387,26 +506,22 @@ pub async fn chat(
     // behaviour from outside the user's messages.
     let has_system = history.iter().any(|m| matches!(m, Message::System { .. }));
     if !has_system {
-        let prompt = build_system_prompt(&tools, None);
+        let tools_for_prompt = mcp_arc.list_tools().await.unwrap_or_default();
+        let prompt = build_system_prompt(&tools_for_prompt, None);
         history.insert(0, Message::System { content: prompt });
     }
 
-    history.push(Message::User {
-        content: args.user_input.clone(),
-    });
-
-    let req = ChatRequest {
+    // -- Loop config + send guard ---------------------------------------
+    let loop_cfg = LoopConfig {
+        max_tool_turns: 8,
         model: model.clone(),
-        messages: history,
-        tools,
         temperature: 0.3,
         max_tokens: recommended_max_tokens(&pid_str),
     };
+    let send_guard = TauriSendGuard { app: app.clone() };
 
-    let stream = provider.chat(req).await.map_err(|e| e.to_string())?;
-    let mut stream = Box::pin(stream);
-
-    // Install a cancellation token for this session so cancel_chat can stop us.
+    // -- Cancellation token (registered before the spawn so cancel_chat
+    //    can find it the instant the user hits Stop) ---------------------
     let cancel_notify = Arc::new(tokio::sync::Notify::new());
     {
         let st = state.lock().await;
@@ -416,109 +531,295 @@ pub async fn chat(
             .insert(args.session_id.clone(), cancel_notify.clone());
     }
 
-    // Multi-session support: dispatch the stream into a detached background
-    // task so the UI can switch sessions freely without blocking the chat.
-    // Each session gets its own event channel (`chat:<session_id>`) which the
-    // frontend listens to on demand.
+    // -- Move everything into the spawn ---------------------------------
     let session_id = args.session_id.clone();
-    let provider_id_str = pid_str.clone();
-    let app_clone = app.clone();
-    let state_clone = state.inner().clone();
+    let user_input = args.user_input.clone();
+    let app_for_spawn = app.clone();
+    let state_for_spawn = state.inner().clone();
+    let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Backing buffers the closure mutates; we keep one Arc clone in the
+    // outer scope so the cancel branch can read whatever was emitted
+    // right before the user hit Stop.
+    let assistant_text_buf = Arc::new(std::sync::Mutex::new(String::new()));
+    let reasoning_text_buf = Arc::new(std::sync::Mutex::new(String::new()));
 
     tokio::spawn(async move {
-        let mut assistant_text = String::new();
-        let mut reasoning_text = String::new();
-        // Streaming persistence — write a partial snapshot every
-        // `STREAM_FLUSH_EVERY` delta events so a crash mid-stream does not
-        // cost the user the whole response. The next flush overwrites via
-        // `append_turn` (INSERT OR REPLACE on (session_id, seq)).
-        const STREAM_FLUSH_EVERY: usize = 8;
-        let mut dirty_events: usize = 0;
+        // -- Drive the agentic loop under a cancel-aware select ---------
+        let run_fut = conversation::run_turn(
+            &*provider,
+            &mcp_arc,
+            &send_guard,
+            &loop_cfg,
+            &mut history,
+            &user_input,
+            on_event_fn(
+                cancel_flag.clone(),
+                assistant_text_buf.clone(),
+                reasoning_text_buf.clone(),
+                session_id.clone(),
+                app_for_spawn.clone(),
+                state_for_spawn.clone(),
+            ),
+        );
 
-        loop {
-            tokio::select! {
-                _ = cancel_notify.notified() => {
-                    let _ = app_clone.emit(
+        tokio::select! {
+            run_result = run_fut => {
+                if let Err(e) = run_result {
+                    let _ = app_for_spawn.emit(
                         &format!("chat:{session_id}"),
-                        UiEventPayload::from(&StreamEvent::Error {
-                            message: "cancelled by user".into(),
-                            retriable: false,
-                        }),
+                        UiEventPayload::Error { message: e.to_string() },
                     );
-                    break;
                 }
-                ev = futures::StreamExt::next(&mut stream) => {
-                    let ev = match ev {
-                        Some(ev) => ev,
-                        None => break,
-                    };
-                    match &ev {
-                        StreamEvent::Delta { text } => assistant_text.push_str(text),
-                        StreamEvent::ReasoningDelta { text } => reasoning_text.push_str(text),
-                        _ => {}
-                    }
-                    let _ = app_clone.emit(
-                        &format!("chat:{session_id}"),
-                        UiEventPayload::from(&ev),
-                    );
-                    if matches!(
-                        ev,
-                        StreamEvent::Done { .. } | StreamEvent::Error { .. }
-                    ) {
-                        break;
-                    }
-                    // Periodically flush a partial assistant turn to the
-                    // history store so a crash mid-stream does not lose the
-                    // work. We coalesce events to avoid hammering SQLite.
-                    dirty_events += 1;
-                    if dirty_events >= STREAM_FLUSH_EVERY {
-                        dirty_events = 0;
-                        let st_flush = state_clone.lock().await;
-                        let partial = line_hub_core::history::Turn {
-                            session_id: session_id.clone(),
-                            seq: std::i64::MAX, // sentinel — REPLACE wins
-                            role: "assistant".into(),
-                            content: assistant_text.clone(),
-                            reasoning: if reasoning_text.is_empty() {
-                                None
-                            } else {
-                                Some(reasoning_text.clone())
-                            },
-                            tool_trace: None,
-                            ts: chrono::Utc::now().timestamp_millis(),
-                        };
-                        let _ = st_flush.history.append_turn(&partial);
-                    }
-                }
+            }
+            _ = cancel_notify.notified() => {
+                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                // run_fut is dropped here, which cancels any in-flight
+                // MCP call / SSE stream the loop was waiting on. The
+                // provider's history is updated only when run_turn
+                // completes a turn; we synthesise the partial assistant
+                // message below so the cancel state is recoverable.
+                let text_snapshot = assistant_text_buf
+                    .lock()
+                    .expect("assistant_text mutex poisoned")
+                    .clone();
+                let reasoning_snapshot = reasoning_text_buf
+                    .lock()
+                    .expect("reasoning_text mutex poisoned")
+                    .clone();
+                history.push(Message::Assistant {
+                    content: if text_snapshot.is_empty() {
+                        None
+                    } else {
+                        Some(text_snapshot)
+                    },
+                    reasoning: if reasoning_snapshot.is_empty() {
+                        None
+                    } else {
+                        Some(reasoning_snapshot)
+                    },
+                    tool_calls: None,
+                });
+                let _ = app_for_spawn.emit(
+                    &format!("chat:{session_id}"),
+                    UiEventPayload::Error { message: "cancelled by user".into() },
+                );
             }
         }
 
-        // Persist assistant turn back into the in-memory session history.
-        let st = state_clone.lock().await;
-        let mut sessions = st.sessions.write().await;
-        if let Some(session) = sessions.get_mut(&session_id) {
-            session.history.push(Message::Assistant {
-                content: if assistant_text.is_empty() {
-                    None
-                } else {
-                    Some(assistant_text.clone())
-                },
-                reasoning: if reasoning_text.is_empty() {
-                    None
-                } else {
-                    Some(reasoning_text)
-                },
-                tool_calls: None,
-            });
+        // -- Persist final history back into the in-memory session ------
+        let st = state_for_spawn.lock().await;
+        if let Some(session) = st.sessions.write().await.get_mut(&session_id) {
+            session.history = history;
         }
         // Drop the cancellation token for this session — chat is over.
-        let mut cancel = st.cancel.write().await;
-        cancel.remove(&session_id);
-        let _ = provider_id_str; // silence unused warning if future-proofed
+        st.cancel.write().await.remove(&session_id);
     });
 
     // Return immediately so the frontend can keep typing / switching sessions.
     Ok(args.session_id.clone())
+}
+
+/// Helper: build the sync `FnMut(UiEvent) + Send` adapter that
+/// `conversation::run_turn` requires. Kept as a free function so the
+/// closure's environment stays readable instead of being inlined into
+/// the spawn body.
+fn on_event_fn(
+    cancel_flag: Arc<std::sync::atomic::AtomicBool>,
+    assistant_text_buf: Arc<std::sync::Mutex<String>>,
+    reasoning_text_buf: Arc<std::sync::Mutex<String>>,
+    session_id: String,
+    app: AppHandle,
+    state: Arc<Mutex<AppState>>,
+) -> impl FnMut(UiEvent) + Send {
+    const STREAM_FLUSH_EVERY: usize = 8;
+    let mut dirty_events: usize = 0;
+    move |ev: UiEvent| {
+        if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let is_delta = matches!(&ev, UiEvent::Delta(_));
+        match &ev {
+            UiEvent::Delta(t) => assistant_text_buf
+                .lock()
+                .expect("assistant_text mutex poisoned")
+                .push_str(t),
+            UiEvent::Reasoning(t) => reasoning_text_buf
+                .lock()
+                .expect("reasoning_text mutex poisoned")
+                .push_str(t),
+            _ => {}
+        }
+        let payload = ui_event_to_payload(ev);
+        let _ = app.emit(&format!("chat:{session_id}"), payload);
+
+        if is_delta {
+            dirty_events += 1;
+            if dirty_events >= STREAM_FLUSH_EVERY {
+                dirty_events = 0;
+                let st_clone = state.clone();
+                let session_id_clone = session_id.clone();
+                let text_snapshot = assistant_text_buf
+                    .lock()
+                    .expect("assistant_text mutex poisoned")
+                    .clone();
+                let reasoning_snapshot = reasoning_text_buf
+                    .lock()
+                    .expect("reasoning_text mutex poisoned")
+                    .clone();
+                tokio::spawn(async move {
+                    let st = st_clone.lock().await;
+                    let partial = line_hub_core::history::Turn {
+                        session_id: session_id_clone,
+                        seq: std::i64::MAX, // sentinel — REPLACE wins
+                        role: "assistant".into(),
+                        content: text_snapshot,
+                        reasoning: if reasoning_snapshot.is_empty() {
+                            None
+                        } else {
+                            Some(reasoning_snapshot)
+                        },
+                        tool_trace: None,
+                        ts: chrono::Utc::now().timestamp_millis(),
+                    };
+                    let _ = st.history.append_turn(&partial);
+                });
+            }
+        }
+    }
+}
+
+/// Map a `conversation::UiEvent` (the agentic loop's progress signal)
+/// to the corresponding `UiEventPayload` that ships over the Tauri
+/// event channel. Kept as a free function so the closure body in
+/// `on_event_fn` stays focused on emission + persistence.
+fn ui_event_to_payload(ev: UiEvent) -> UiEventPayload {
+    match ev {
+        UiEvent::Delta(text) => UiEventPayload::Delta { text },
+        UiEvent::Reasoning(text) => UiEventPayload::Reasoning { text },
+        UiEvent::ToolStart {
+            id,
+            name,
+            args_preview,
+        } => UiEventPayload::ToolStart {
+            id,
+            name,
+            args_preview,
+        },
+        UiEvent::ToolArgs {
+            id,
+            args,
+            attachment_count,
+        } => UiEventPayload::ToolArgs {
+            id,
+            args,
+            attachment_count,
+        },
+        UiEvent::ToolDone {
+            id,
+            name,
+            result_preview,
+            attachments,
+        } => {
+            // Typed blocks ride through as `UiAttachment`s; the React
+            // side reverses the base64 data URLs back into `<img>` /
+            // `<audio>` tags.
+            let ui_attachments: Vec<UiAttachment> =
+                attachments.iter().map(UiAttachment::from).collect();
+            UiEventPayload::ToolDone {
+                id,
+                name,
+                result_preview,
+                attachments: ui_attachments,
+            }
+        }
+        UiEvent::SendBlocked { chat, message } => UiEventPayload::SendBlocked { chat, message },
+        UiEvent::Done => UiEventPayload::Done,
+        UiEvent::Error(message) => UiEventPayload::Error { message },
+    }
+}
+
+/// `SendGuard` that pops a native OS confirmation dialog before any
+/// LINE-sending tool runs. The agentic loop calls `approve_send`
+/// synchronously; we return an async future that resolves once the
+/// user clicks OK or Cancel.
+struct TauriSendGuard {
+    app: AppHandle,
+}
+
+#[async_trait::async_trait]
+impl SendGuard for TauriSendGuard {
+    async fn approve_send(
+        &self,
+        chat: &str,
+        message: &str,
+        tool: &str,
+    ) -> line_hub_core::HubResult<bool> {
+        let body = format!(
+            "Line 小幫手 想要呼叫「{tool}」\n\n\
+             聊天室：{chat}\n\n\
+             訊息：\n{text}\n\n\
+             按「確定」允許送出，按「取消」拒絕。",
+            text = if message.chars().count() > 400 {
+                let truncated: String = message.chars().take(400).collect();
+                format!("{truncated}…\n（已截斷，共 {} 字）", message.chars().count())
+            } else {
+                message.to_string()
+            },
+        );
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.app
+            .dialog()
+            .message(body)
+            .title("LINE 訊息送出確認")
+            .buttons(MessageDialogButtons::OkCancel)
+            .show(move |ok| {
+                let _ = tx.send(ok);
+            });
+        Ok(rx.await.unwrap_or(false))
+    }
+}
+
+/// Fallback `McpTool` used when the user has not yet spawned a real
+/// `McpClient`. Returns an empty tool list so the agentic loop
+/// degenerates to a single non-agentic turn (matching the v0.4.0
+/// behaviour when MCP was offline).
+struct NoopMcp;
+
+#[async_trait::async_trait]
+impl McpTool for NoopMcp {
+    async fn list_tools(
+        &self,
+    ) -> line_hub_core::HubResult<
+        Vec<line_hub_core::provider::ToolDefinition>,
+    > {
+        Ok(Vec::new())
+    }
+
+    async fn call_tool(
+        &self,
+        _name: &str,
+        _args: serde_json::Value,
+    ) -> line_hub_core::HubResult<serde_json::Value> {
+        Err(line_hub_core::HubError::McpTransport(
+            "no MCP server running — call spawn_mcp first".into(),
+        ))
+    }
+
+    async fn call_tool_structured(
+        &self,
+        _name: &str,
+        _args: serde_json::Value,
+    ) -> line_hub_core::HubResult<ToolResult> {
+        Ok(ToolResult::Err {
+            message: "no MCP server running — call spawn_mcp first".into(),
+        })
+    }
+
+    fn tool_registry(&self) -> line_hub_core::mcp::ToolRegistry {
+        line_hub_core::mcp::ToolRegistry::default()
+    }
+
+    async fn shutdown(&self) {}
 }
 
 #[tauri::command]
@@ -600,36 +901,78 @@ fn build_system_prompt(tools: &[ToolDefinition], active_chat: Option<&str>) -> S
          Important guardrails:\n\
          - Any tool whose name starts with `send_`, `stage_`, or overwrites a draft REQUIRES explicit user confirmation before being invoked. The app surfaces a native dialog; never claim a message was sent without seeing a successful tool result.\n\
          - Read tools (`get_*`, `search_*`, `verify_*`, `copy_*`, `translate_*`) are free to call.\n\
+         - For chat history, prefer `get_line_local_messages` (the v3.0.0 default — 31-day window, cursor pagination, optional image previews). Avoid the older `get_line_chatroom_history_*` paging tools unless `get_line_local_messages` is unavailable on the current LINE build.\n\
+         - For visual workflows that need user eyeball confirmation (`confirm_line_chat_view`, `confirm_line_reply_source_target`, `get_line_ui_state`, `get_line_poll_state`), the user MUST look at the returned screenshot before the corresponding token is issued — never accept a confirmation without that screenshot.\n\
+         - Use `get_line_workflow` + `prepare_line_workflow` to plan mentions, replies and polls BEFORE executing; both are pure validators that don't touch LINE.\n\
          - Use `get_line_capabilities` to discover what is currently wired up before relying on a tool.\n\
          - For bulk operations (export, history lookup) prefer a single tool call over several speculative ones.\n\
+         - All date / time filters are interpreted in Asia/Taipei (UTC+08:00).\n\
          \n\
          Respond in the language the user writes in (繁體中文 by default).{chat_hint}"
     )
 }
 
+/// Maps one tool name to a short category label used by `build_system_prompt`.
+///
+/// Tool names track the 29 tools exposed by `line-desktop-mcp` v3.0.0
+/// (up from 24 in v1.x). The categories are kept coarse on purpose so
+/// the system prompt stays compact even with 29 tools loaded.
 fn categorize_tool(name: &str) -> &'static str {
     if name.starts_with("send_") || name == "stage_line_reply" || name == "stage_line_forward" {
         "send (guarded)"
-    } else if name.starts_with("set_line_draft")
-        || name == "get_line_draft"
-        || name == "clear_line_draft"
-    {
+    } else if matches!(
+        name,
+        "set_line_draft" | "get_line_draft" | "clear_line_draft"
+    ) {
         "draft"
     } else if name.starts_with("export_") {
         "export"
     } else if name.starts_with("search_") || name.starts_with("verify_") {
         "search/verify"
-    } else if name.starts_with("get_line_chat") || name.starts_with("get_line_chatroom_history") {
+    } else if matches!(
+        name,
+        "get_line_chat_messages"
+            | "get_line_chatroom_history_short"
+            | "get_line_chatroom_history_default"
+            | "get_line_chatroom_history_long"
+    ) {
         "read history"
-    } else if name.starts_with("copy_")
-        || name.starts_with("translate_")
-        || name.starts_with("send_file_")
-    {
+    } else if name == "get_line_local_messages" {
+        // v3.0.0's flagship read tool — keep its own bucket so the
+        // system prompt can hint to prefer it over the older paging tools.
+        "read history (local + media preview)"
+    } else if matches!(
+        name,
+        "copy_line_message"
+            | "translate_line_message"
+            | "send_file_manual"
+            | "stage_line_reply"
+            | "stage_line_forward"
+    ) {
         "compose"
-    } else if name.starts_with("open_") {
-        "navigate"
-    } else if name.starts_with("get_line_") {
-        "status/capabilities"
+    } else if matches!(
+        name,
+        "open_line_chat"
+            | "open_line_chat_feature"
+            | "get_line_capabilities"
+            | "get_line_status"
+    ) {
+        "navigate / status"
+    } else if matches!(
+        name,
+        "get_line_workflow" | "prepare_line_workflow"
+    ) {
+        "workflow planning"
+    } else if matches!(
+        name,
+        "get_line_ui_state"
+            | "confirm_line_chat_view"
+            | "get_line_reply_source_target"
+            | "confirm_line_reply_source_target"
+    ) {
+        "visual confirmation (caller must inspect screenshot)"
+    } else if name == "get_line_poll_state" {
+        "polls (read-only)"
     } else {
         "other"
     }

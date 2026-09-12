@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Line 小幫手",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "identifier": "com.tt-openclaw.line-xiaobangshou",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -33,7 +33,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": ["nsis"],
     "category": "Productivity",
     "shortDescription": "Multi-model AI desktop client for LINE Desktop MCP",
     "longDescription": "LINE Model Hub — pick any AI provider (MiniMax M3, OpenAI, Anthropic, Ollama) and have it drive line-desktop-mcp to read chats, draft, and send on your behalf. Every send requires explicit approval.",

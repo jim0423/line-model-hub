@@ -3,6 +3,93 @@
 All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+
+## [0.5.0] - 2026-09-12
+
+v0.5.0 is tuned to the line-desktop-mcp **v3.0.0** release. It covers
+the new 29-tool surface, fail-closed named-chat verification flow, and
+typed image / audio blocks returned by \`get_line_local_messages\`.
+
+### ✨ New
+
+- **Typed image / audio attachments in tool results**
+  (\`crates/line-hub-core/src/mcp.rs\`, \`commands.rs::UiAttachment\`)
+  \`call_tool_structured()\` decodes the MCP \`content: Content[]\` blocks
+  into typed variants (\`Text\` / \`Image\` / \`Audio\` / \`Unsupported\`).
+  Image bytes ride the Tauri event channel as inline \`data:\` URLs so
+  the React frontend can render \`<img src=...>\` without any extra
+  \`file://\` plumbing on the way.
+
+- **Agentic loop wired into the chat command**
+  (\`commands.rs::chat\` + \`conversation::run_turn\`)
+  \`chat()\` now drives \`conversation::run_turn\` instead of streaming
+  directly into a \`tokio::spawn\`. AI can decide to call a tool, get
+  the result back, and chain into another provider turn — up to 8
+  tool turns per message — before returning a final reply.
+
+- **Native send-guard in the agentic loop**
+  (\`commands.rs::TauriSendGuard\`)
+  When the model wants to invoke any \`send_*\` / \`stage_line_reply\`
+  tool the Tauri command layer now pops a real OS confirmation
+  dialog (\`tauri-plugin-dialog\`) inline. Approvals survive across
+  tool calls within one \`run_turn\` session; refusals still let the
+  loop continue with a \`SendBlocked\` trace.
+
+- **\`get_line_capabilities\` health card**
+  (\`commands.rs::fetch_capabilities\`, \`App.tsx\`)
+  Right after \`spawn_mcp\` the UI requests
+  \`get_line_capabilities({mode:"all"})\` and renders a "LINE feature
+  map" (tool count, direct / uia / guided_ui /
+  unavailable_windows buckets). Returns a synthetic "spawn MCP
+  first" payload if the child is not running.
+
+- **Asia/Taipei timezone helpers**
+  (\`crates/line-hub-core/src/tz.rs\`)
+  \`tz::local_midnight_to_utc(date)\` and \`tz::today_local()\` keep all
+  date filters flowing into the bridge in \`+08:00\` regardless of the
+  host system timezone — matching line-desktop-mcp v3.0.0 own
+  fixed-Asia/Taipei behaviour. Three unit tests cover round-trip and
+  bad-input cases.
+
+- **\`categorize_tool\` extended to all 29 tools**
+  (\`commands.rs::categorize_tool\`)
+  Replaces the v0.4.0 8-category heuristic with explicit \`matches!\`
+  arms for every tool exposed by line-desktop-mcp v3.0.0:
+  \`get_line_local_messages\` (its own bucket so the system prompt
+  can recommend it), the four \`confirm_*\` visual-confirmation tools
+  (caller must inspect screenshot), \`prepare_line_workflow\`,
+  \`get_line_poll_state\`, etc. No more silent fallthrough to \`other\`.
+
+- **\`build_system_prompt\` v3.0.0 hints**
+  (\`commands.rs::build_system_prompt\`)
+  System prompt now nudges the model to (a) prefer
+  \`get_line_local_messages\` over the older paging tools, (b) look at
+  the screenshot before issuing any confirmation token, (c) plan
+  mentions / replies / polls with \`prepare_line_workflow\` before
+  executing, and (d) treat all date / time filters as Asia/Taipei
+  (UTC+08:00).
+
+### 🐛 Fixed
+
+- **\`mcp.rs::registry_sink()\` was \`unimplemented!()\`**
+  The v0.4.0 code panicked the first time \`initialize()\` ran because
+  the published registry lived behind an unreachable \`Mutex\` stub.
+  v0.5.0 replaces it with \`Arc<RwLock<ToolRegistry>>\` and the spawn
+  flow writes through the lock instead of crashing.
+
+- **\`McpClient\` registry was empty after spawn**
+  Symptom: any code path that called \`mcp.tool_registry()\` immediately
+  after \`spawn_mcp\` got a zero-length registry. \`initialize()\` now
+  writes through the lock before returning.
+
+### 🧪 Tests
+
+- \`mcp::tests\` adds 5 cases: text / image / audio block decoding,
+  unsupported block fallback, oversize-image rejection.
+- \`tz::tests\` adds 3 cases: midnight round-trip, bad-date rejection,
+  \`today_local()\` stays in range.
+- Workspace count now **45+** lib tests passing (was 34 in v0.4.0).
+
 ## [0.4.0] - 2026-09-11
 
 ### ✨ New
