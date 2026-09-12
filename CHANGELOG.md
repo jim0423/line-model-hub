@@ -4,6 +4,41 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.0] - 2026-09-12
+
+Local-only mode toggle + MCP auto-respawn framework + cancel streaming. On top of v0.5.0-v0.5.2 code base.
+
+### New
+
+- **Local-only mode toggle (P1-A)** - New checkbox in Settings dialog.
+  - When enabled, build_system_prompt filters out 8 tools that mutate LINE state: `send_*`, `stage_*`, `set_line_draft`, `clear_line_draft`, `open_line_chat`, `open_line_chat_feature`, `get_line_draft`, `export_line_chat_history`.
+  - MCP child is still spawned (so we keep the local DB reader); only send-class tools are hidden from the system prompt.
+  - Read tools (`get_line_local_messages`, `search_*`, `verify_*`, `get_line_capabilities`, `get_line_poll_state`, `copy_*`, `translate_*`) stay available.
+  - Persists to `~/.line-hub/config.json::local_only`.
+
+- **MCP child auto-respawn framework (P2-A skeleton)**
+  - New `crates/line-hub-tauri/src/respawn.rs` with `RespawnState`, `RESPAWN_BACKOFF = [1s, 2s, 4s]`, `MAX_RESPAWN_ATTEMPTS = 3`, plus 3 unit tests.
+  - Full watcher task integration deferred to v0.6.1.
+
+- **v0.5.1-2 infra fixes folded in** (no behaviour change):
+  - Tauri config version sync, MSIS bundle removed (WiX 3.14 broken on windows-latest runner).
+  - Workflow tolerates missing MSI glob.
+
+- **New `is_send_guarded_tool(name) -> bool` helper** in `commands.rs` to back the local-only filter.
+
+### Tests
+
+- `cargo test -p line-hub-core --lib` 21+2+8+6+5 = 42 lib tests pass.
+- `cargo test -p line-hub-tauri --lib respawn` 3 respawn tests pass.
+- `cargo check -p line-hub-tauri` 0 errors, 18 benign warnings.
+- `tsc -p tsconfig.json --noEmit` 0 errors.
+- `npm run build` 162.86 KB / 52.58 KB gzip.
+
+### Deferred to v0.6.1
+
+- P1-B: ToolCallTrace per-tool customisation.
+- P1-C: cargo fix --lib to clean up 18 benign warnings.
+
 ## [0.5.0] - 2026-09-12
 
 v0.5.0 is tuned to the line-desktop-mcp **v3.0.0** release. It covers

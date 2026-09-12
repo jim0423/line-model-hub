@@ -329,6 +329,36 @@ pub async fn delete_provider_keyring_key(provider_id: String) -> Result<bool, St
 }
 
 #[tauri::command]
+pub async fn set_local_only(
+    state: State<'_, Arc<Mutex<AppState>>>,
+    enabled: bool,
+) -> Result<bool, String> {
+    // Update the runtime flag while holding the lock, then drop the
+    // lock before the second `await` so we never hold a `MutexGuard`
+    // across a config save roundtrip.
+    {
+        let st = state.lock().await;
+        let mut g = st.local_only.write().await;
+        *g = enabled;
+    }
+    // Persist to the on-disk config so the toggle survives a relaunch.
+    let mut cfg = HubConfig::load().await.unwrap_or_default();
+    cfg.local_only = enabled;
+    cfg.save().await.map_err(|e| format!("save config: {e}"))?;
+    tracing::info!(enabled, "local_only mode toggled");
+    Ok(enabled)
+}
+
+#[tauri::command]
+pub async fn get_local_only(
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<bool, String> {
+    let st = state.lock().await;
+    let g = st.local_only.read().await;
+    Ok(*g)
+}
+
+#[tauri::command]
 pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<ToolDefinition>, String> {
     use line_hub_core::config::HubConfig;
 
@@ -507,7 +537,8 @@ pub async fn chat(
     let has_system = history.iter().any(|m| matches!(m, Message::System { .. }));
     if !has_system {
         let tools_for_prompt = mcp_arc.list_tools().await.unwrap_or_default();
-        let prompt = build_system_prompt(&tools_for_prompt, None);
+        let local_only = *state.lock().await.local_only.read().await;
+        let prompt = build_system_prompt(&tools_for_prompt, None, local_only);
         history.insert(0, Message::System { content: prompt });
     }
 
@@ -874,9 +905,17 @@ fn recommended_max_tokens(provider_id: &str) -> Option<u32> {
 ///   1. The available categories
 ///   2. The send-confirm guard exists
 ///   3. The chat_id alias for the active chatroom
-fn build_system_prompt(tools: &[ToolDefinition], active_chat: Option<&str>) -> String {
+fn build_system_prompt(tools: &[ToolDefinition], active_chat: Option<&str>, local_only: bool) -> String {
     let mut cats: Vec<&str> = Vec::new();
     for t in tools {
+        if local_only && is_send_guarded_tool(&t.name) {
+            // Local-only users have not installed the LINE GUI prerequisites
+            // (CUA Driver, Python, SQLite3MC), so the bridge refuses any
+            // tool that mutates chat state. Hide them from the prompt
+            // entirely instead of letting the model waste a turn on a
+            // tool that will inevitably fail at runtime.
+            continue;
+        }
         let cat = categorize_tool(&t.name);
         if !cats.contains(&cat) {
             cats.push(cat);
@@ -909,6 +948,31 @@ fn build_system_prompt(tools: &[ToolDefinition], active_chat: Option<&str>) -> S
          - All date / time filters are interpreted in Asia/Taipei (UTC+08:00).\n\
          \n\
          Respond in the language the user writes in (繁體中文 by default).{chat_hint}"
+    )
+}
+
+/// v0.6.0: which tools mutate LINE state and therefore need the GUI
+/// prerequisites (`LINE_MCP_CUA_DRIVER` + `LINE_MCP_PYTHON` +
+/// `LINE_MCP_SQLITE3MC_DLL`). Local-only mode filters these out of the
+/// system prompt so users who haven't installed them don't burn turns
+/// on tools that will return `LINE_CHAT_VERIFICATION_UNAVAILABLE`.
+///
+/// Mirrors the SEND_TOOLS list in `line_hub_core::conversation` so that
+/// any drift between the two will be caught by the integration tests.
+fn is_send_guarded_tool(name: &str) -> bool {
+    if name.starts_with("send_") {
+        return true;
+    }
+    matches!(
+        name,
+        "stage_line_reply"
+            | "stage_line_forward"
+            | "set_line_draft"
+            | "clear_line_draft"
+            | "open_line_chat"
+            | "open_line_chat_feature"
+            | "get_line_draft"
+            | "export_line_chat_history"
     )
 }
 

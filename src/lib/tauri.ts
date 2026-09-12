@@ -28,6 +28,8 @@ export interface HubConfig {
         default_model?: string | null;
     }>;
     line_mcp_path?: string | null;
+    /** v0.6.0: when true, hide any tool that mutates LINE state. */
+    local_only?: boolean;
 }
 
 export interface ToolDefinition {
@@ -111,6 +113,19 @@ export const shutdownMcp = () => invoke<void>("shutdown_mcp");
  */
 export const fetchCapabilities = () =>
     invoke<Record<string, any>>("fetch_capabilities");
+
+/**
+ * Toggle "local-only" mode. When enabled, the system prompt hides any
+ * tool that mutates LINE state so a user without the LINE MCP GUI
+ * prerequisites can still read chats via the local DB path.
+ *
+ * Returns the persisted value so the UI can re-render without an extra
+ * `get_local_only` roundtrip.
+ */
+export const setLocalOnly = (enabled: boolean) =>
+    invoke<boolean>("set_local_only", { enabled });
+
+export const getLocalOnly = () => invoke<boolean>("get_local_only");
 
 export const chat = (args: {
     session_id: string;

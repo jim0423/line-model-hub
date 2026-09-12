@@ -15,6 +15,7 @@
 //!     React        line-desktop-mcp child process
 
 mod commands;
+mod respawn;
 mod state;
 
 use state::AppState;
@@ -50,6 +51,8 @@ pub fn run() {
             commands::spawn_mcp,
             commands::shutdown_mcp,
             commands::fetch_capabilities,
+            commands::set_local_only,
+            commands::get_local_only,
             commands::chat,
             commands::cancel_chat,
             commands::request_send_confirm,

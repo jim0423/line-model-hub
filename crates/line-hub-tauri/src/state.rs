@@ -15,6 +15,9 @@ pub struct AppState {
     /// is enforced at the trait level, so a plain `Arc<dyn McpTool>` is
     /// already safe to share across the chat, history and shutdown paths.
     pub mcp: RwLock<Option<Arc<dyn McpTool>>>,
+    /// v0.6.0: hide any tool that mutates LINE state from the system
+    /// prompt. See `HubConfig::local_only` for the on-disk store.
+    pub local_only: RwLock<bool>,
     /// Active chat sessions keyed by session_id.
     pub sessions: RwLock<HashMap<String, ChatSession>>,
     /// Cancellation tokens per session.
@@ -38,6 +41,7 @@ impl AppState {
         Self {
             providers: RwLock::new(HashMap::new()),
             mcp: RwLock::new(None),
+            local_only: RwLock::new(false),
             sessions: RwLock::new(HashMap::new()),
             cancel: RwLock::new(HashMap::new()),
             history,

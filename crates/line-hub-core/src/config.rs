@@ -24,6 +24,12 @@ pub struct HubConfig {
     /// resource shipped with the Tauri app is used.
     #[serde(default)]
     pub line_mcp_path: Option<String>,
+    /// v0.6.0: when `true`, the system prompt hides any tool that mutates
+    /// LINE state (`send_*`, `stage_*`, draft overwrites) so a user who
+    /// has not installed the LINE MCP GUI prerequisites (CUA Driver,
+    /// Python, SQLite3MC DLL) can still read chats via the local DB.
+    #[serde(default)]
+    pub local_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

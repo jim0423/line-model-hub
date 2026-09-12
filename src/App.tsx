@@ -5,6 +5,8 @@ import {
     cancelChat,
     chat,
     deleteHistorySession,
+    fetchCapabilities,
+    getLocalOnly,
     HubConfig,
     HistorySession,
     HistoryTurn,
@@ -16,6 +18,7 @@ import {
     renameHistorySession,
     requestSendConfirm,
     saveConfig,
+    setLocalOnly,
     spawnMcp,
     UiAttachment,
 } from "./lib/tauri";
@@ -132,6 +135,7 @@ export default function App() {
     const [error, setError] = useState<string | null>(null);
     const [mcpTools, setMcpTools] = useState<string[]>([]);
     const [showSettings, setShowSettings] = useState(false);
+    const [localOnly, setLocalOnlyState] = useState(false);
     const [sessions, setSessions] = useState<HistorySession[]>([]);
     const [activeSessionId, setActiveSessionId] = useState<string>(() =>
         newSessionId()
@@ -152,6 +156,12 @@ export default function App() {
                 if (def) setModel(def.id);
             })
             .catch((e) => setError(String(e)));
+        // v0.6.0: hydrate the persisted local-only toggle so the
+        // toggle correctly reports across reloads (and so the chat
+        // loop picks the right system prompt on cold start).
+        getLocalOnly()
+            .then((v) => setLocalOnlyState(v))
+            .catch(() => setLocalOnlyState(false));
     }, []);
 
     // Initial session load: fetch the sidebar list and the active session's
@@ -1118,6 +1128,14 @@ function SettingsDialog({
 }) {
     const [keys, setKeys] = useState<Record<string, string>>({});
     const [mcpPath, setMcpPath] = useState("");
+    // v0.6.0: local-only mode lives in SettingsDialog so it can be
+    // toggled even before the MCP child has been spawned. We hydrate
+    // the checkbox from the persisted config (via cfg.local_only) and
+    // mirror changes onto a local state so users get instant feedback
+    // while `set_local_only` is the source of truth on disk.
+    const [localOnlyDraft, setLocalOnlyDraft] = useState(
+        cfg?.local_only ?? false,
+    );
 
     // Always show the four canonical providers even if the Rust backend
     // hasn't pushed an entry yet — otherwise the user has no way to add
@@ -1165,13 +1183,30 @@ function SettingsDialog({
                         line-desktop-mcp entry path (server.js)
                     </label>
                     <input
-                        value={mcpPath || cfg?.line_mcp_path || ""}
-                        onChange={(e) => setMcpPath(e.target.value)}
-                        placeholder="C:\\Tools\\line-desktop-mcp\\src\\server.js"
-                        className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm font-mono"
-                    />
-                </div>
-                <div className="flex justify-end gap-2 pt-2">
+                                        value={mcpPath || cfg?.line_mcp_path || ""}
+                                        onChange={(e) => setMcpPath(e.target.value)}
+                                        placeholder="C:\\Tools\\line-desktop-mcp\\src\\server.js"
+                                        className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm font-mono"
+                                    />
+                                    </div>
+                                    <label className="flex items-start gap-3 text-sm text-white/80 cursor-pointer rounded border border-white/10 px-3 py-2 bg-white/[0.02] hover:bg-white/[0.05]">
+                                        <input
+                                            type="checkbox"
+                                            checked={localOnlyDraft}
+                                            onChange={(e) => setLocalOnlyDraft(e.target.checked)}
+                                            className="mt-0.5 h-4 w-4 accent-emerald-400"
+                                        />
+                                        <span>
+                                            <span className="font-semibold block">本地只讀模式</span>
+                                            <span className="text-xs text-white/60">
+                                                隱藏 send_、stage_、set_line_draft 等會更動 LINE
+                                                狀態的工具。如果只裝了本機 DB 讀取器但沒裝 CUA
+                                                Driver / Python / SQLite3MC DLL，請開啟這個，
+                                                模型就不會浪費 turn 在會 fail 的工具上。
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <div className="flex justify-end gap-2 pt-2">
                     <button
                         onClick={onClose}
                         className="px-4 py-2 rounded text-sm bg-white/5 hover:bg-white/10"
@@ -1194,8 +1229,10 @@ function SettingsDialog({
                                             : {}),
                                     })) ?? [],
                                 line_mcp_path: mcpPath || cfg?.line_mcp_path || null,
+                                local_only: localOnlyDraft,
                             };
                             onSave(merged);
+                            setLocalOnly(localOnlyDraft).catch(() => undefined);
                         }}
                         className="px-4 py-2 rounded text-sm bg-emerald-500 hover:bg-emerald-400"
                     >
