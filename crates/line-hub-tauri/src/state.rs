@@ -5,13 +5,16 @@ use line_hub_core::mcp::McpTool;
 use line_hub_core::provider::{ChatRequest, Provider, StreamEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 pub struct AppState {
     /// Active provider instances keyed by ProviderId.
     pub providers: RwLock<HashMap<String, Arc<dyn Provider>>>,
     /// Active MCP client (None until `spawn_mcp` is called).
-    pub mcp: RwLock<Option<Arc<Mutex<Box<dyn McpTool>>>>>,
+    /// v0.5.0: dropped the inner Mutex+Box wrapper — `McpTool: Send + Sync`
+    /// is enforced at the trait level, so a plain `Arc<dyn McpTool>` is
+    /// already safe to share across the chat, history and shutdown paths.
+    pub mcp: RwLock<Option<Arc<dyn McpTool>>>,
     /// Active chat sessions keyed by session_id.
     pub sessions: RwLock<HashMap<String, ChatSession>>,
     /// Cancellation tokens per session.

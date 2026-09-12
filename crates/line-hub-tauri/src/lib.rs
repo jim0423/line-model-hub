@@ -49,6 +49,7 @@ pub fn run() {
             commands::mcp_status,
             commands::spawn_mcp,
             commands::shutdown_mcp,
+            commands::fetch_capabilities,
             commands::chat,
             commands::cancel_chat,
             commands::request_send_confirm,

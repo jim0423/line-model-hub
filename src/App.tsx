@@ -17,6 +17,7 @@ import {
     requestSendConfirm,
     saveConfig,
     spawnMcp,
+    UiAttachment,
 } from "./lib/tauri";
 
 interface UiEvent {
@@ -35,6 +36,10 @@ interface UiEvent {
     args_preview?: string;
     args?: any;
     result_preview?: string;
+    /** tool_args — number of attachments the tool will receive */
+    attachment_count?: number;
+    /** tool_done — attachments returned by the tool, rendered inline */
+    attachments?: UiAttachment[];
     chat?: string;
     message?: string;
     message_text?: string;
@@ -54,6 +59,10 @@ interface ToolCallTrace {
     args?: any;
     args_preview?: string;
     result_preview?: string;
+    /** Number of attachments the tool received (from tool_args event) */
+    attachment_count?: number;
+    /** Attachments returned by the tool (from tool_done event) */
+    attachments?: UiAttachment[];
     blocked?: boolean;
 }
 
@@ -200,7 +209,17 @@ export default function App() {
                     next[next.length - 1] = {
                         ...last,
                         toolTrace: (last.toolTrace ?? []).map((t) =>
-                            t.id === ev.id ? { ...t, args: ev.args } : t
+                            t.id === ev.id
+                                ? {
+                                      ...t,
+                                      args: ev.args,
+                                      // capture so the card can show a 📎 N badge
+                                      // even before tool_done arrives
+                                      attachment_count:
+                                          ev.attachment_count ??
+                                          t.attachment_count,
+                                  }
+                                : t
                         ),
                     };
                 } else if (ev.kind === "tool_done" && ev.id) {
@@ -208,7 +227,14 @@ export default function App() {
                         ...last,
                         toolTrace: (last.toolTrace ?? []).map((t) =>
                             t.id === ev.id
-                                ? { ...t, result_preview: ev.result_preview ?? "" }
+                                ? {
+                                      ...t,
+                                      result_preview: ev.result_preview ?? "",
+                                      attachments: ev.attachments ?? t.attachments,
+                                      attachment_count:
+                                          ev.attachments?.length ??
+                                          t.attachment_count,
+                                  }
                                 : t
                         ),
                     };
@@ -673,6 +699,15 @@ function ToolCard({ trace }: { trace: ToolCallTrace }) {
                 <span className="font-semibold text-white/90">
                     {v.title}
                 </span>
+                {trace.attachment_count !== undefined &&
+                    trace.attachment_count > 0 && (
+                        <span
+                            className="px-1.5 py-0.5 rounded bg-white/10 text-white/70 text-[10px] font-mono"
+                            title={`${trace.attachment_count} attachment(s)`}
+                        >
+                            📎 {trace.attachment_count}
+                        </span>
+                    )}
                 <span className="ml-auto text-white/40 font-mono text-[10px]">
                     {trace.name}
                 </span>
@@ -736,6 +771,52 @@ function ToolCard({ trace }: { trace: ToolCallTrace }) {
             {trace.blocked && (
                 <div className="px-3 py-1.5 bg-amber-500/20 text-amber-300 text-[11px] border-t border-amber-500/30">
                     ⚠ 已被守衛攔下（需手動確認）
+                </div>
+            )}
+            {trace.attachments && trace.attachments.length > 0 && (
+                <div className="border-t border-white/10 px-3 py-2 space-y-2">
+                    {trace.attachments.map((att, i) => {
+                        if (att.kind === "image" && att.src) {
+                            return (
+                                <div key={i} className="mt-2">
+                                    <img
+                                        src={att.src}
+                                        alt={att.note ?? "LINE attachment"}
+                                        className="rounded border max-w-full max-h-72 object-contain bg-zinc-50"
+                                    />
+                                    <div className="text-xs text-zinc-500 mt-1">
+                                        {att.mime_type} · {att.bytes} bytes
+                                    </div>
+                                </div>
+                            );
+                        }
+                        if (att.kind === "audio" && att.src) {
+                            return (
+                                <div key={i} className="mt-2">
+                                    <audio
+                                        controls
+                                        src={att.src}
+                                        className="w-full"
+                                    />
+                                    <div className="text-xs text-zinc-500 mt-1">
+                                        {att.mime_type} · {att.bytes} bytes
+                                    </div>
+                                </div>
+                            );
+                        }
+                        if (att.kind === "unsupported") {
+                            return (
+                                <div
+                                    key={i}
+                                    className="mt-2 text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded"
+                                >
+                                    ⚠ {att.mime_type} — {att.note}
+                                </div>
+                            );
+                        }
+                        // text fallback (no special rendering; shown via result_preview / args)
+                        return null;
+                    })}
                 </div>
             )}
         </div>
