@@ -2209,12 +2209,13 @@ dependencies = [
 
 [[package]]
 name = "line-hub-core"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "dotenvy",
@@ -2238,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "line-hub-mcp"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -2252,9 +2253,10 @@ dependencies = [
 
 [[package]]
 name = "line-hub-tauri"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "futures",
  "line-hub-core",

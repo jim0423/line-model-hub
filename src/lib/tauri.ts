@@ -102,6 +102,16 @@ export const spawnMcp = () => invoke<ToolDefinition[]>("spawn_mcp");
 
 export const shutdownMcp = () => invoke<void>("shutdown_mcp");
 
+/**
+ * One call to `get_line_capabilities` against the running LINE MCP child.
+ * Returns the raw JSON value so the UI can render the LINE feature map
+ * (toolCount, direct / uia / guided_ui / unavailable_windows buckets).
+ * The Tauri command wraps the `LINE_MCP_NOT_SPAWNED` error path so we
+ * can detect "spawn first" from the React side without a thrown error.
+ */
+export const fetchCapabilities = () =>
+    invoke<Record<string, any>>("fetch_capabilities");
+
 export const chat = (args: {
     session_id: string;
     user_input: string;
@@ -111,3 +121,62 @@ export const chat = (args: {
 
 export const cancelChat = (sessionId: string) =>
     invoke<void>("cancel_chat", { sessionId });
+
+// ---------------------------------------------------------------------------
+// Streaming UI event payload — mirror of `UiEventPayload` and `UiAttachment`
+// in crates/line-hub-tauri/src/commands.rs. Emitted as `chat:<session_id>`
+// events from the backend; the frontend uses these to grow the assistant
+// bubble + tool trace in real time.
+//
+// The Rust side is `#[serde(tag = "kind", rename_all = "snake_case")]`, so
+// each event object on the wire is `{ "kind": "<variant>", ... }`. Keep the
+// optional fields in sync with the enum variants above.
+// ---------------------------------------------------------------------------
+
+export interface UiAttachment {
+    kind: "text" | "image" | "audio" | "unsupported";
+    /** text variant */
+    text?: string;
+    /** image / audio variant — base64 data URI or asset URL the renderer can <img src=...> */
+    src?: string;
+    /** image / audio / unsupported */
+    mime_type?: string;
+    /** image / audio — original byte size of the attachment */
+    bytes?: number;
+    /** unsupported variant — human-readable explanation */
+    note?: string;
+}
+
+export interface UiEvent {
+    kind:
+        | "delta"
+        | "reasoning"
+        | "tool_start"
+        | "tool_args"
+        | "tool_done"
+        | "send_blocked"
+        | "done"
+        | "error";
+    /** delta / reasoning */
+    text?: string;
+    /** tool_start / tool_args / tool_done */
+    id?: string;
+    /** tool_start / tool_done */
+    name?: string;
+    /** tool_start */
+    args_preview?: string;
+    /** tool_args */
+    args?: any;
+    /** tool_done */
+    result_preview?: string;
+    /** tool_args — number of attachments the tool will receive */
+    attachment_count?: number;
+    /** tool_done — attachments returned by the tool (rendered inline) */
+    attachments?: UiAttachment[];
+    /** send_blocked */
+    chat?: string;
+    /** send_blocked / error — backend uses `message` for both */
+    message?: string;
+    /** send_blocked — alternate field name some events carry */
+    message_text?: string;
+}
