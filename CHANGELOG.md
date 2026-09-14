@@ -4,7 +4,93 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
-## [0.6.5] - 2026-09-14
+## [0.6.6] - 2026-09-14
+
+Hotfix for v0.6.5 NSIS bundling failure.
+
+### Why v0.6.5 was wrong
+
+I claimed `installerHooks` resolves against `target/release/nsis/x64/`
+(the NSIS bundler's `current_dir(output_path)` call site). **Wrong.**
+That `current_dir()` only changes CWD for the **makensis subprocess**,
+which runs AFTER `dunce::canonicalize(installer_hooks)` has already
+been resolved (line 398 in `nsis/mod.rs`).
+
+Looking at the **tauri-cli** source (`crates/tauri-cli/src/build.rs:166`):
+
+```rust
+set_current_dir(dirs.tauri).context("failed to set current directory")?;
+```
+
+`cargo tauri build` switches the process CWD to `dirs.tauri` BEFORE
+running any other step. `dirs.tauri` is the directory containing
+`tauri.conf.json` — in this project, `<repo>/crates/line-hub-tauri/`.
+
+So `dunce::canonicalize("installerHooks")` runs from
+`<repo>/crates/line-hub-tauri/`, NOT the workspace root or the
+NSIS output directory.
+
+### 🐛 Fixed
+
+```diff
+- "installerHooks": "../../../../nsis-hooks.nsh"
++ "installerHooks": "../../nsis-hooks.nsh"
+```
+
+Two `..` walk back from `<repo>/crates/line-hub-tauri/` to the
+workspace root, where `nsis-hooks.nsh` lives.
+
+```
+<repo>/crates/line-hub-tauri/..  = <repo>/crates/
+<repo>/crates/..              = <repo>/
+<repo>/nsis-hooks.nsh         ✓
+```
+
+### Lessons (added to skill SOP — Mode D)
+
+- **`cargo tauri build` permanently switches CWD to `dirs.tauri`**
+  via `set_current_dir()` at line 166 of `tauri-cli/src/build.rs`,
+  BEFORE any path resolution happens.
+- **`dunce::canonicalize(...)` for fields like `installerHooks`
+  resolves against `dirs.tauri`**, i.e. the manifest dir
+  (`crates/<crate>/`).
+- **The bundler's later `current_dir(output_path)` only affects the
+  makensis subprocess**, which runs AFTER path resolution. So the
+  bundler's intermediate-directory state is irrelevant for config-path
+  resolution.
+- **The path-resolution base is therefore `dirs.tauri` = manifest-dir
+  for both `bundle.resources` AND `installerHooks`!** They are the
+  SAME base (Mode A), contrary to what v0.6.4 / v0.6.5 hypothesised.
+
+### Why we kept guessing wrong
+
+- v0.6.2: assumed workspace-root (no `../`). Failed.
+- v0.6.3: assumed `../` from workspace root. Failed.
+- v0.6.4: assumed `set_current_dir` doesn't happen, moved file to
+  workspace root, used 0 `../`. Failed because CWD is actually
+  manifest dir.
+- v0.6.5: assumed bundler output dir `target/release/nsis/x64/`,
+  used `../../../../`. Failed because `set_current_dir` runs LATER
+  only for makensis.
+- v0.6.6: greps `set_current_dir` in tauri-cli, finds it runs at
+  `build.rs:166` BEFORE path resolution. Uses `../../`. Hopefully
+  right.
+
+### Future-proof alternatives (deferred)
+
+The 2-deep `../../` is correct but still brittle if Tauri re-arranges
+where tauri.conf.json sits. More robust options:
+
+- **Use `custom_template_path` for a full custom `installer.nsi`**
+  — but that file has the same CWD issue.
+- **Co-locate `nsis-hooks.nsh` inside the manifest dir**
+  (`crates/line-hub-tauri/nsis-hooks.nsh`) and use just the basename.
+  This is what `bundle.resources` and `frontendDist` effectively do.
+- **Lobby Tauri to add `tauri_dir` env var injection for hooks**, or
+  to resolve paths via `config_parent.join(...)` instead of
+  `dunce::canonicalize()`.
+
+Total: 24 lib tests pass. `cargo check` clean.
 
 Hotfix for v0.6.4 NSIS bundling failure.
 
