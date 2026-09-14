@@ -436,28 +436,35 @@ impl McpClient {
         // Bundled-by-installer fallback — figure out where the running
         // binary lives. `current_exe()` is the documented way; resolves
         // symlinks so we end up in the real install dir.
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let candidates = [
-                    dir.join("resources")
-                        .join("line-desktop-mcp")
-                        .join("src")
-                        .join("server.js"),
-                    dir.join("..")
-                        .join("resources")
-                        .join("line-desktop-mcp")
-                        .join("src")
-                        .join("server.js"),
-                    dir.join("..")
-                        .join("..")
-                        .join("resources")
-                        .join("line-desktop-mcp")
-                        .join("src")
-                        .join("server.js"),
-                ];
-                for c in &candidates {
-                    if c.exists() {
-                        return Ok(c.clone());
+        //
+        // Test hook: `HUB_TEST_NO_BUNDLED=1` short-circuits the bundled
+        // walk so unit tests can pin the "no candidate found" path
+        // without having to mock `current_exe()` (which always points at
+        // the test runner, far from any real install dir).
+        if std::env::var_os("HUB_TEST_NO_BUNDLED").is_none() {
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    let candidates = [
+                        dir.join("resources")
+                            .join("line-desktop-mcp")
+                            .join("src")
+                            .join("server.js"),
+                        dir.join("..")
+                            .join("resources")
+                            .join("line-desktop-mcp")
+                            .join("src")
+                            .join("server.js"),
+                        dir.join("..")
+                            .join("..")
+                            .join("resources")
+                            .join("line-desktop-mcp")
+                            .join("src")
+                            .join("server.js"),
+                    ];
+                    for c in &candidates {
+                        if c.exists() {
+                            return Ok(c.clone());
+                        }
                     }
                 }
             }
@@ -622,8 +629,14 @@ mod tests {
     fn default_entry_path_returns_err_when_nothing_set() {
         // With both env vars cleared and no bundled resources, we expect
         // LineMcpNotFound so spawn_mcp can surface the human hint.
+        // `HUB_TEST_NO_BUNDLED=1` short-circuits the bundled-walk branch
+        // so the test runner's stub resources/ tree doesn't accidentally
+        // satisfy the candidate walk (the test binary sits in
+        // target/debug/deps/, where Tauri's build script drops a real
+        // resources/line-desktop-mcp/src/server.js).
         let _path_guard = EnvVarGuard::set("HUB_LINE_MCP_PATH", None);
         let _bundled_guard = EnvVarGuard::set("LINE_MODEL_HUB_BUNDLED", None);
+        let _test_guard = EnvVarGuard::set("HUB_TEST_NO_BUNDLED", Some("1"));
         let res = McpClient::default_entry_path();
         assert!(
             matches!(res, Err(HubError::LineMcpNotFound)),

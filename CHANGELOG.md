@@ -4,6 +4,29 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.2] - 2026-09-14
+
+Hotfix for v0.6.1 GitHub Actions build failure.
+
+### 🐛 Fixed
+
+- **Bundled-resource paths now resolve correctly** — `tauri.conf.json`
+  `bundle.resources` keys are resolved relative to the manifest dir
+  (`crates/line-hub-tauri/`), not the workspace root. Use `../../vendor/`
+  so the build script finds the cloned line-desktop-mcp source.
+- **npm-shrinkwrap.json is the lockfile** — line-desktop-mcp ships
+  `npm-shrinkwrap.json`, not `package-lock.json`. Renamed the bundled
+  resource so Tauri's build-script pre-flight check does not fail.
+- **`default_entry_path_returns_err_when_nothing_set` no longer
+  false-passes** — added a `HUB_TEST_NO_BUNDLED=1` test hook that
+  short-circuits the bundled walk in unit tests. Without it, the test
+  runner's stub `target/debug/resources/...` tree satisfied the
+  candidate walk and the test reported `Ok(...)` instead of the
+  expected `Err(LineMcpNotFound)`.
+
+Total: 24 lib tests pass.
+
+
 ## [0.6.1] - 2026-09-14
 
 Bundle line-desktop-mcp inside the installer + complete the v0.4.0

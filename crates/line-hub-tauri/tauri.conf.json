@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Line 小幫手",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "identifier": "com.tt-openclaw.line-xiaobangshou",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -41,9 +41,9 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "vendor/line-desktop-mcp/src/server.js": "resources/line-desktop-mcp/src/server.js",
-      "vendor/line-desktop-mcp/package.json": "resources/line-desktop-mcp/package.json",
-      "vendor/line-desktop-mcp/package-lock.json": "resources/line-desktop-mcp/package-lock.json"
+      "../../vendor/line-desktop-mcp/src/server.js": "resources/line-desktop-mcp/src/server.js",
+      "../../vendor/line-desktop-mcp/package.json": "resources/line-desktop-mcp/package.json",
+      "../../vendor/line-desktop-mcp/npm-shrinkwrap.json": "resources/line-desktop-mcp/npm-shrinkwrap.json"
     },
     "windows": {
       "wix": {
