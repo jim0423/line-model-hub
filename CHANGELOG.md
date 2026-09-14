@@ -4,7 +4,23 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
-## [0.6.2] - 2026-09-14
+## [0.6.3] - 2026-09-14
+
+Hotfix for v0.6.2 GitHub Actions bundling failure.
+
+### 🐛 Fixed
+
+- **`installerHooks` path is manifest-dir relative** — same pitfall as
+  v0.6.1's `bundle.resources` paths. Tauri resolved `scripts/nsis-hooks.nsh`
+  to `crates/line-hub-tauri/scripts/nsis-hooks.nsh` which does not exist.
+  Use `../scripts/nsis-hooks.nsh` so the bundler finds the file in the
+  workspace root.
+
+The build script itself compiled successfully in 9m 27s; only the
+NSIS installer step that fires AFTER `cargo build --release` was
+affected. No code changes.
+
+Total: 24 lib tests pass.
 
 Hotfix for v0.6.1 GitHub Actions build failure.
 
