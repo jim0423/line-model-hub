@@ -1,11 +1,11 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Line 小幫手",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "identifier": "com.tt-openclaw.line-xiaobangshou",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && bash scripts/vendor-line-desktop-mcp.sh",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../../dist"
   },
@@ -36,10 +36,15 @@
     "targets": ["nsis"],
     "category": "Productivity",
     "shortDescription": "Multi-model AI desktop client for LINE Desktop MCP",
-    "longDescription": "LINE Model Hub — pick any AI provider (MiniMax M3, OpenAI, Anthropic, Ollama) and have it drive line-desktop-mcp to read chats, draft, and send on your behalf. Every send requires explicit approval.",
+    "longDescription": "LINE Model Hub — pick any AI provider (MiniMax M3, OpenAI, Anthropic, Ollama) and have it drive line-desktop-mcp to read chats, draft, and send on your behalf. Every send requires explicit approval. v0.6.1+ ships line-desktop-mcp bundled inside the installer; no separate clone + npm install required.",
     "icon": [
       "icons/icon.ico"
     ],
+    "resources": {
+      "vendor/line-desktop-mcp/src/server.js": "resources/line-desktop-mcp/src/server.js",
+      "vendor/line-desktop-mcp/package.json": "resources/line-desktop-mcp/package.json",
+      "vendor/line-desktop-mcp/package-lock.json": "resources/line-desktop-mcp/package-lock.json"
+    },
     "windows": {
       "wix": {
         "language": ["en-US", "zh-TW"]
@@ -47,8 +52,9 @@
       "nsis": {
         "languages": ["English", "TradChinese"],
         "installerIcon": "icons/icon.ico",
-        "installMode": "perMachine"
-    }
+        "installMode": "perMachine",
+        "installerHooks": "scripts/nsis-hooks.nsh"
+      }
     }
   }
 }

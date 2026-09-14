@@ -4,6 +4,66 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.1] - 2026-09-14
+
+Bundle line-desktop-mcp inside the installer + complete the v0.4.0
+keyring integration that v0.6.0 left half-wired. No more separate
+`git clone` + `npm install` per machine — one installer ships everything.
+
+### ✨ New
+
+- **Bundled line-desktop-mcp installer** (P0-A)
+  - `scripts/vendor-line-desktop-mcp.sh` clones a SHA-pinned copy of
+    `line-desktop-mcp@v3.0.0` into `vendor/line-desktop-mcp/` at build time.
+    Idempotent: re-runs of `cargo tauri build` skip the clone when the
+    pinned tag already matches.
+  - `tauri.conf.json` `bundle.resources` ships `src/server.js`,
+    `package.json`, and `package-lock.json` into the installer's
+    `<install-dir>\resources\line-desktop-mcp\` tree (~5 MB extra).
+  - `scripts/nsis-hooks.nsh` runs `npm install --omit=dev --ignore-scripts`
+    in `$INSTDIR\resources\line-desktop-mcp\` during install. Writes a
+    `.installed` sentinel so subsequent launches can skip the bootstrap.
+    If `node.exe` is missing, surfaces a clear `install-node-missing.txt`
+    next to the app instead of crashing.
+  - `default_entry_path` in `crates/line-hub-core/src/mcp.rs` now falls
+    back to the bundled layout. Resolution priority becomes:
+    `HUB_LINE_MCP_PATH` env → `LINE_MODEL_HUB_BUNDLED` env → bundled
+    `<exe-dir>/resources/line-desktop-mcp/src/server.js` (with two
+    candidate walks for `bin/`, root, and one level up). Only when all
+    three fail does the user see the Settings hint.
+
+- **OS keyring wired into `save_config` (P0-B, completes v0.4.0 stub)**
+  - `save_config` now mirrors every non-empty API key into the OS
+    keyring (Windows Credential Manager / macOS Keychain / Linux Secret
+    Service) before persisting the JSON file. Empty keys delete the
+    entry so the Settings "clear key" path stays correct.
+  - `list_providers` reports `is_configured = true` whenever EITHER the
+    keyring has a credential OR the JSON config has plaintext. Closes
+    the v0.6.0 half-finished integration where the keyring module
+    existed but was never called from the save path.
+
+### 🧪 Tests
+
+- `default_entry_path_env_wins_over_bundled` — env var beats bundled walk.
+- `default_entry_path_env_dir_resolves_to_server_js` — bundle dir appends
+  `src/server.js` automatically.
+- `default_entry_path_returns_err_when_nothing_set` — honest error path.
+- Existing 21 tests still green. **Total: 24 lib tests pass.**
+
+### ⚠️ Known limitations
+
+- npm install on first launch can take 30-90s depending on network. The
+  NSIS install hook logs to `%TEMP%\line-desktop-mcp-install.log`; the
+  app starts immediately so the user is not blocked.
+- Build-time `npm install` smoke test in `vendor-line-desktop-mcp.sh`
+  needs Node 22 on the build machine. CI already has it (line 47 of
+  `build-windows.yml`). Set `SKIP_NPM_INSTALL=1` to skip on dev boxes
+  without network.
+- Installer size grows from ~5 MB to ~10-50 MB depending on whether
+  node_modules is bundled at build time (we strip it; user-side npm
+  install fetches at first launch).
+
+
 ## [0.6.0] - 2026-09-12
 
 Local-only mode toggle + MCP auto-respawn framework + cancel streaming. On top of v0.5.0-v0.5.2 code base.

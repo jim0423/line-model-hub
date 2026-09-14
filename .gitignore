@@ -23,3 +23,10 @@ Thumbs.db
 
 # Line Desktop MCP vendored copy (user installs separately)
 bundled/line-desktop-mcp/node_modules/
+# v0.6.1: vendor line-desktop-mcp is cached for fast rebuilds but never
+# committed — git clone is cheap enough that checking in a few MB of
+# sources is not worth the noise.
+/vendor/
+
+# v0.6.1: scripts/nsis-hooks.nsh build artefact.
+/scripts/*.bak

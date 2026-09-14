@@ -410,10 +410,57 @@ impl McpClient {
         out
     }
 
-    /// Find line-desktop-mcp entry script: env HUB_LINE_MCP_PATH > bundled.
+    /// Find line-desktop-mcp entry script.
+    ///
+    /// Resolution priority (matches `spawn_mcp` in
+    /// `crates/line-hub-tauri/src/commands.rs`):
+    ///   1. `HUB_LINE_MCP_PATH` env var (CI / silent installs).
+    ///   2. `LINE_MODEL_HUB_BUNDLED` env var pointing at a directory —
+    ///      resolved as `<dir>/src/server.js`.
+    ///   3. Bundled alongside the running binary, at
+    ///      `<exe_dir>/resources/line-desktop-mcp/src/server.js`
+    ///      (v0.6.1 installer ships this layout). Falls back to
+    ///      `<exe_dir>/../resources/line-desktop-mcp/src/server.js`
+    ///      because NSIS installs to `bin\` for some bundle configs.
+    ///
+    /// Returns `LineMcpNotFound` only when none of the above exist —
+    /// `spawn_mcp` then surfaces the human-readable hint that points
+    /// the user at Settings.
     pub fn default_entry_path() -> HubResult<PathBuf> {
         if let Ok(p) = std::env::var("HUB_LINE_MCP_PATH") {
             return Ok(PathBuf::from(p));
+        }
+        if let Ok(dir) = std::env::var("LINE_MODEL_HUB_BUNDLED") {
+            return Ok(PathBuf::from(dir).join("src").join("server.js"));
+        }
+        // Bundled-by-installer fallback — figure out where the running
+        // binary lives. `current_exe()` is the documented way; resolves
+        // symlinks so we end up in the real install dir.
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let candidates = [
+                    dir.join("resources")
+                        .join("line-desktop-mcp")
+                        .join("src")
+                        .join("server.js"),
+                    dir.join("..")
+                        .join("resources")
+                        .join("line-desktop-mcp")
+                        .join("src")
+                        .join("server.js"),
+                    dir.join("..")
+                        .join("..")
+                        .join("resources")
+                        .join("line-desktop-mcp")
+                        .join("src")
+                        .join("server.js"),
+                ];
+                for c in &candidates {
+                    if c.exists() {
+                        return Ok(c.clone());
+                    }
+                }
+            }
         }
         Err(HubError::LineMcpNotFound)
     }
@@ -507,6 +554,82 @@ pub async fn placeholder() -> HubResult<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// RAII guard that restores an env var when dropped. Avoids leaking
+    /// state across tests if one panics.
+    struct EnvVarGuard {
+        key: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let prior = std::env::var_os(key);
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+            Self { key, prior }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.prior.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// Build a temp dir under a per-test prefix. Cleans itself up on drop is
+    /// not implemented because the OS reclaims it at process exit; we just
+    /// want a unique-enough path for the env-var trick to use.
+    fn tempdir_via_env(prefix: &str) -> std::path::PathBuf {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}"));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn default_entry_path_env_wins_over_bundled() {
+        // HUB_LINE_MCP_PATH env var must take precedence over any bundled
+        // lookup — this guards the v0.6.1 installer from being overridden
+        // by an SDK pointing at a custom checkout (or vice versa).
+        let _guard = EnvVarGuard::set("HUB_LINE_MCP_PATH", Some("/tmp/from-env.js"));
+        let res = McpClient::default_entry_path().expect("env path");
+        assert_eq!(res, std::path::PathBuf::from("/tmp/from-env.js"));
+    }
+
+    #[test]
+    fn default_entry_path_env_dir_resolves_to_server_js() {
+        // LINE_MODEL_HUB_BUNDLED points at the *directory*; the function
+        // resolves it to <dir>/src/server.js so the installer can simply
+        // ship a directory tree.
+        let dir = tempdir_via_env("LINE_HUB_TEST_BUNDLE");
+        let _env_guard = EnvVarGuard::set("LINE_MODEL_HUB_BUNDLED", Some(dir.to_str().unwrap()));
+        let _path_guard = EnvVarGuard::set("HUB_LINE_MCP_PATH", None);
+        let res = McpClient::default_entry_path().expect("bundled dir");
+        assert_eq!(res, dir.join("src").join("server.js"));
+    }
+
+    #[test]
+    fn default_entry_path_returns_err_when_nothing_set() {
+        // With both env vars cleared and no bundled resources, we expect
+        // LineMcpNotFound so spawn_mcp can surface the human hint.
+        let _path_guard = EnvVarGuard::set("HUB_LINE_MCP_PATH", None);
+        let _bundled_guard = EnvVarGuard::set("LINE_MODEL_HUB_BUNDLED", None);
+        let res = McpClient::default_entry_path();
+        assert!(
+            matches!(res, Err(HubError::LineMcpNotFound)),
+            "expected LineMcpNotFound, got {res:?}"
+        );
+    }
 
     #[test]
     fn decode_text_block() {

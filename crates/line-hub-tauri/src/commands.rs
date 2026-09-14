@@ -170,8 +170,16 @@ pub async fn list_providers(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Ve
                 .map(|p| p.list_models())
                 .unwrap_or_default(),
         };
+        // v0.6.1: provider is configured if EITHER the keyring has a
+        // secret OR the config.json has plaintext (legacy / dev mode).
+        // This keeps the Settings ⚠ badge honest across both paths.
+        let keyring_hit = line_hub_core::keyring::get_api_key(&id_str)
+            .ok()
+            .flatten()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
         out.push(ProviderSummary {
-            is_configured: !entry.api_key.is_empty(),
+            is_configured: keyring_hit || !entry.api_key.is_empty(),
             default_model: entry.default_model.clone(),
             id: id_str,
             label: label_for(entry.id),
@@ -223,6 +231,21 @@ pub async fn load_config() -> Result<HubConfig, String> {
 
 #[tauri::command]
 pub async fn save_config(cfg: HubConfig) -> Result<(), String> {
+    // v0.6.1: mirror non-empty API keys to the OS keyring so they are
+    // encrypted at rest and never persist as plaintext JSON. Empty keys
+    // delete the entry instead — keeps Settings "clear key" working.
+    for entry in &cfg.providers {
+        let id = entry.id.as_str();
+        if entry.api_key.is_empty() {
+            // Best-effort delete: if there is nothing stored, ignore the
+            // resulting `Ok(false)` — we do not want a missing entry to
+            // fail the whole save.
+            let _ = line_hub_core::keyring::delete_api_key(id);
+        } else {
+            line_hub_core::keyring::set_api_key(id, &entry.api_key)
+                .map_err(|e| format!("keyring set({id}): {e}"))?;
+        }
+    }
     cfg.save().await.map_err(|e| e.to_string())
 }
 

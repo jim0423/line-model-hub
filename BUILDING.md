@@ -71,27 +71,37 @@ See `crates/line-hub-tauri/tauri.conf.json` `bundle` section:
 - **icon** — replace `icons/icon.ico` with a 256×256 multi-resolution icon
   generated from your source PNG.
 
-## Bundling line-desktop-mcp
+## Bundling line-desktop-mcp (v0.6.1+ ships it by default)
 
-The Tauri app expects `line-desktop-mcp` to be installed separately and
-pointed to via:
+Since v0.6.1 the Tauri installer bundles line-desktop-mcp automatically.
+The build pipeline runs `scripts/vendor-line-desktop-mcp.sh` (hooked via
+`beforeBuildCommand`) which clones a SHA-pinned copy into
+`vendor/line-desktop-mcp/`. The NSIS installer then:
 
-1. **Settings dialog** → "line-desktop-mcp entry path" field.
-2. **Environment variable** `HUB_LINE_MCP_PATH` — useful for CI / silent
-   installs.
+1. Copies `src/server.js` + `package.json` + `package-lock.json` into
+   `<install-dir>\resources\line-desktop-mcp\`.
+2. Runs `npm install --omit=dev --ignore-scripts` so `node_modules/` is
+   ready before the first launch.
 
-To bundle a copy of `line-desktop-mcp` **inside** the installer (so end users
-don't need to install Node):
+The Rust side resolves the bundled path via `default_entry_path()` in
+`crates/line-hub-core/src/mcp.rs` (env var → bundled → explicit error).
+
+### Re-vendoring to a newer line-desktop-mcp tag
 
 ```powershell
-# In a postinstall script (or manual step)
-git clone --depth 1 --branch v1.2.0 https://github.com/bensonmaxai/line-desktop-mcp.git
-cd line-desktop-mcp
-npm install --omit=dev --ignore-scripts
+$env:LINE_DESKTOP_MCP_TAG="v3.1.0"
+bash scripts/vendor-line-desktop-mcp.sh
+cargo tauri build
 ```
 
-Then point Settings at
-`<install-dir>\resources\line-desktop-mcp\src\server.js`.
+### Reverting to manual install
+
+If a build needs to ship the LINE 小幫手 binary only (e.g. for a server
+that already has line-desktop-mcp installed system-wide), clear
+`bundle.resources` in `tauri.conf.json` and remove the
+`installerHooks` reference. The Settings dialog's "line-desktop-mcp
+entry path" field then becomes the only way to point at the MCP
+child.
 
 ## Troubleshooting
 

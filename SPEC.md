@@ -145,8 +145,12 @@ is interactive and we already have all deps installed.
 | NSIS installer | `crates/line-hub-tauri/target/release/bundle/nsis/*-setup.exe` |
 
 Both installers embed the React bundle and the Tauri shell. line-desktop-mcp
-is **not** bundled in v0.1 — users install it separately and point Settings at
-its `server.js` path. Bundling line-desktop-mcp is a v1.0 target.
+**is bundled in v0.6.1+** — the installer ships a pinned copy under
+`resources\line-desktop-mcp\` and a NSIS postinstall hook runs
+`npm install --omit=dev --ignore-scripts` so the user never sees a
+manual bootstrap step. To re-vendor or upgrade the bundled
+line-desktop-mcp commit, edit `LINE_DESKTOP_MCP_TAG` in
+`scripts/vendor-line-desktop-mcp.sh` and rerun `cargo tauri build`.
 
 ## 9. Open issues (deferred to v0.2+)
 
