@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Line 小幫手",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "identifier": "com.tt-openclaw.line-xiaobangshou",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -53,7 +53,7 @@
         "languages": ["English", "TradChinese"],
         "installerIcon": "icons/icon.ico",
         "installMode": "perMachine",
-        "installerHooks": "nsis-hooks.nsh"
+        "installerHooks": "../../../../nsis-hooks.nsh"
       }
     }
   }

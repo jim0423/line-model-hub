@@ -4,7 +4,66 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
-## [0.6.4] - 2026-09-14
+## [0.6.5] - 2026-09-14
+
+Hotfix for v0.6.4 NSIS bundling failure.
+
+### Why v0.6.4 was wrong
+
+I claimed `installerHooks` resolves against the process CWD which
+during `cargo tauri build` is the workspace root. **Wrong on both
+counts.** Looking at the NSIS bundler source more carefully
+(`crates/tauri-bundler/src/bundle/windows/nsis/mod.rs`):
+
+```rust
+let output_path = settings.project_out_directory().join("nsis").join(arch);
+...
+let status = nsis_cmd
+    .args(...)
+    .arg(installer_nsi_path)
+    .current_dir(output_path)   // ← CWD switched HERE before makensis runs
+```
+
+Tauri's NSIS bundler switches CWD to `target/release/nsis/x64/`
+before resolving any relative paths. So `dunce::canonicalize("nsis-hooks.nsh")`
+runs from there, not the workspace root.
+
+### 🐛 Fixed
+
+`tauri.conf.json` `installerHooks`:
+
+```diff
+- "installerHooks": "nsis-hooks.nsh"
++ "installerHooks": "../../../../nsis-hooks.nsh"
+```
+
+Four `..` climb back from `target/release/nsis/x64/` to the
+workspace root. Ugly but mechanically correct.
+
+### Lessons (added to skill SOP)
+
+- **Tauri NSIS bundler CWD is `target/release/nsis/<arch>/`**, NOT the
+  workspace root. Four `..` walk back to the repo root.
+- **The path-resolution stack has THREE different bases**, not two:
+  1. `bundle.resources` / `frontendDist` → manifest-dir (`crates/<crate>/`)
+  2. `beforeBuildCommand` → workspace root
+  3. NSIS bundler → `target/release/nsis/<arch>/`
+- **Always grep the Tauri source for the `current_dir()` call** before
+  guessing which base a config field uses. The bundler silently
+  switches CWD before resolving relative paths.
+
+### Future cleanup (deferred)
+
+The four `..` is fragile — if Tauri adds another path component (e.g.
+`target/release/nsis/x64_unicode/`) the count breaks. Better long-term
+fixes:
+
+- Use `custom_template_path` for a full custom `installer.nsi` that
+  inlines the hook logic via `!include "${__FILE__}"`.
+- Or copy `nsis-hooks.nsh` into `target/release/nsis/<arch>/` from
+  `beforeBuildCommand` so the path resolves in CWD.
+
+Total: 24 lib tests pass. `cargo check` clean.
 
 Hotfix for v0.6.3 NSIS bundling failure.
 
