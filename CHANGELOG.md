@@ -4,23 +4,46 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
-## [0.6.3] - 2026-09-14
+## [0.6.4] - 2026-09-14
 
-Hotfix for v0.6.2 GitHub Actions bundling failure.
+Hotfix for v0.6.3 NSIS bundling failure.
+
+### Why v0.6.3 was wrong
+
+I claimed `installerHooks` is manifest-dir relative like
+`bundle.resources`. **It isn't.** Looking at Tauri source
+(`crates/tauri-bundler/src/bundle/windows/nsis/mod.rs` line 398):
+
+```rust
+let installer_hooks = dunce::canonicalize(installer_hooks).fs_context(
+    "failed to resolve `bundle > windows > nsis > installerHooks`", ...
+)?;
+```
+
+`dunce::canonicalize()` resolves the path against the **process CWD**,
+not the manifest dir. On `cargo tauri build` the CWD is the workspace
+root, so `../scripts/nsis-hooks.nsh` walked out of the repo entirely.
 
 ### 🐛 Fixed
 
-- **`installerHooks` path is manifest-dir relative** — same pitfall as
-  v0.6.1's `bundle.resources` paths. Tauri resolved `scripts/nsis-hooks.nsh`
-  to `crates/line-hub-tauri/scripts/nsis-hooks.nsh` which does not exist.
-  Use `../scripts/nsis-hooks.nsh` so the bundler finds the file in the
-  workspace root.
+- Moved `scripts/nsis-hooks.nsh` → `nsis-hooks.nsh` (workspace root).
+  Updated `tauri.conf.json` `installerHooks` to `"nsis-hooks.nsh"` so
+  the CWD-relative resolution just works.
+- `scripts/vendor-line-desktop-mcp.sh` is unaffected — `beforeBuildCommand`
+  is invoked with CWD = workspace root so `scripts/vendor-...` has
+  resolved correctly since v0.6.1.
 
-The build script itself compiled successfully in 9m 27s; only the
-NSIS installer step that fires AFTER `cargo build --release` was
-affected. No code changes.
+### Lessons (carried into skill SOP)
 
-Total: 24 lib tests pass.
+- **Not all Tauri paths use the same base.** `bundle.resources` and
+  `frontendDist` are manifest-dir relative; `installerHooks`,
+  `installerIcon`, etc. are process-CWD relative. Read the bundler
+  source before guessing.
+- **When CI surfaces a path resolution bug, grep the Tauri source for
+  the canonicalize/resolve call** to see exactly which base is in
+  use. Saves a lot of guess-and-check.
+
+Total: 24 lib tests pass. `cargo check` clean.
 
 Hotfix for v0.6.1 GitHub Actions build failure.
 
