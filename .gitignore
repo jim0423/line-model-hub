@@ -21,12 +21,17 @@ Thumbs.db
 # Local config (API keys live in OS keyring, but config.json may have non-secret bits)
 *.local.json
 
-# Line Desktop MCP vendored copy (user installs separately)
+# Line Desktop MCP vendored copy
 bundled/line-desktop-mcp/node_modules/
-# v0.6.1: vendor line-desktop-mcp is cached for fast rebuilds but never
-# committed — git clone is cheap enough that checking in a few MB of
-# sources is not worth the noise.
+# v0.6.7: the clone now lives under crates/line-hub-tauri/vendor/ so it
+# is a sibling of tauri.conf.json — this lets `bundle.resources` source
+# paths resolve identically under tauri-build (manifest-dir CWD) and the
+# NSIS bundler (target/release/nsis/<arch>/ CWD). Git clone is cheap;
+# checking in the ~5 MB vendored sources would create churn every time
+# upstream bumps.
 /vendor/
+/crates/*/vendor/
+/crates/**/vendor/
 
 # v0.6.1: scripts/nsis-hooks.nsh build artefact.
 /scripts/*.bak

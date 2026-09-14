@@ -1,23 +1,34 @@
 #!/usr/bin/env bash
 # scripts/vendor-line-desktop-mcp.sh
 #
-# Vendors a pinned copy of line-desktop-mcp into vendor/line-desktop-mcp/
-# for bundling into the Tauri installer. Called from `beforeBuildCommand`
-# in tauri.conf.json — runs both locally and in CI before `cargo tauri
-# build`.
+# Vendors a pinned copy of line-desktop-mcp into
+# crates/line-hub-tauri/vendor/line-desktop-mcp/ for bundling into the
+# Tauri installer. Called from `beforeBuildCommand` in tauri.conf.json —
+# runs both locally and in CI before `cargo tauri build`.
 #
 # Why this exists: v0.6.1 ships line-desktop-mcp bundled so end users do
 # not need to `git clone` + `npm install` separately. We clone once at
 # build time, check in a SHA-pinned tag, and let NSIS post-install do the
 # user-side `npm install --omit=dev --ignore-scripts`.
 #
+# Why the clone lives under crates/line-hub-tauri/vendor/ (not just
+# vendor/): the tauri-bundler's `cwd.join(resource.path())` call uses
+# the manifest-dir as cwd (set by `tauri-cli/build.rs:166`
+# `set_current_dir(dirs.tauri)`). With a relative `vendor/...` source
+# path in tauri.conf.json, the joined absolute path becomes
+# `<workspace>/crates/line-hub-tauri/vendor/line-desktop-mcp/...` —
+# so the clone must live there. The absolute path is then emitted
+# verbatim into the NSIS template's File directive, which resolves
+# correctly under both tauri-build's manifest-dir CWD and NSIS's
+# makensis CWD.
+#
 # Idempotent: skip the clone if vendor/line-desktop-mcp/package.json is
 # already present and matches the pinned version.
 #
 # Outputs:
-#   vendor/line-desktop-mcp/src/server.js   — entry script (bundled)
-#   vendor/line-desktop-mcp/package.json    — npm manifest (bundled)
-#   vendor/line-desktop-mcp/package-lock.json — npm lock (bundled, if present)
+#   crates/line-hub-tauri/vendor/line-desktop-mcp/src/server.js
+#   crates/line-hub-tauri/vendor/line-desktop-mcp/package.json
+#   crates/line-hub-tauri/vendor/line-desktop-mcp/npm-shrinkwrap.json
 #
 # Size: about 5 MB without node_modules (bundled), another ~50 MB if
 # build-time `npm install` runs in CI for smoke test.
@@ -28,7 +39,7 @@ set -euo pipefail
 # this requires a fresh build + installer.
 LINE_DESKTOP_MCP_TAG="${LINE_DESKTOP_MCP_TAG:-v3.0.0}"
 REPO="https://github.com/bensonmaxai/line-desktop-mcp.git"
-DEST="vendor/line-desktop-mcp"
+DEST="crates/line-hub-tauri/vendor/line-desktop-mcp"
 
 # Marker file — if the destination is already populated and matches the
 # pinned tag, skip the clone. This keeps local rebuilds fast.
@@ -44,7 +55,7 @@ if [[ -f "${DEST}/package.json" && -f "${MARKER}" ]]; then
     rm -rf "${DEST}"
 fi
 
-mkdir -p vendor
+mkdir -p "$(dirname "$DEST")"
 echo "[vendor] cloning ${REPO} @ ${LINE_DESKTOP_MCP_TAG} (shallow, --depth 1)..."
 git clone --depth 1 --branch "${LINE_DESKTOP_MCP_TAG}" "${REPO}" "${DEST}.tmp"
 rm -rf "${DEST}"

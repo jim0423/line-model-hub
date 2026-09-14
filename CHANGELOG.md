@@ -4,6 +4,108 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.7] - 2026-09-14
+
+Hotfix for v0.6.6 installer-not-bundling-mcp bug.
+
+### Symptom
+
+After installing v0.6.6, the app launched but immediately showed:
+
+> ⚠ Cannot find line-desktop-mcp. Open Settings and paste the path to
+> line-desktop-mcp\src\server.js (or set HUB_LINE_MCP_PATH).
+
+The GitHub Actions build had succeeded and the installer had run, but
+runtime could not find the bundled MCP server entry script.
+
+### Root cause
+
+`grep -c 'server.js' v0.6.6-installer.exe` → **0 occurrences**.
+`grep -c 'line-desktop-mcp' v0.6.6-installer.exe` → **0 occurrences**.
+
+`tauri-bundler/src/bundle/windows/nsis/mod.rs:825` does:
+
+```rust
+let cwd = std::env::current_dir()?;
+let src = cwd.join(resource.path());
+let resource_path = dunce::simplified(&src).to_path_buf();
+```
+
+`cwd` is the **manifest-dir** (`crates/line-hub-tauri/`), set by
+`tauri-cli/build.rs:166` `set_current_dir(dirs.tauri)` before
+tauri-bundler runs. The resulting `src` becomes the literal string
+emitted into the NSIS template's `File` directive. NSIS then runs
+makensis from `target/release/nsis/<arch>/` (set by
+`nsis/mod.rs:704` `.current_dir(output_path)`).
+
+Crucially, **`cwd.join(relative_path)` with an absolute `cwd` always
+yields an absolute path**. So a `bundle.resources` key of
+`vendor/line-desktop-mcp/src/server.js` (no leading `../`) is emitted
+to NSIS as an **absolute path** like
+`D:\a\line-model-hub\line-model-hub\crates\line-hub-tauri\vendor\line-desktop-mcp\src\server.js`,
+which NSIS uses verbatim — no relative resolution, no silent skip.
+
+The bug in v0.6.1-v0.6.6 was using `../../vendor/...` (the value
+correct for **tauri-build**'s `canonicalize()` from manifest-dir CWD)
+but **wrong for NSIS** because:
+
+1. `cwd.join("../../vendor/...")` produces
+   `crates/line-hub-tauri/../../vendor/...` which canonicalizes to
+   `<workspace>/vendor/...` (workspace-root).
+2. That absolute path is emitted to NSIS as
+   `<workspace>/vendor/line-desktop-mcp/src/server.js`.
+3. The actual clone lived at `<workspace>/vendor/line-desktop-mcp/...`
+   in v0.6.1, so NSIS should have found it — but the file lookup
+   NSIS performs can fail silently on long paths or symlinks.
+
+The cleanest fix: **move the clone into the manifest-dir itself** so
+`cwd.join("vendor/line-desktop-mcp/...")` resolves to the absolute
+path the bundler actually emits, and the file is always there
+(`<workspace>/crates/line-hub-tauri/vendor/line-desktop-mcp/...`).
+
+### Fix
+
+- `scripts/vendor-line-desktop-mcp.sh` clones into
+  `crates/line-hub-tauri/vendor/line-desktop-mcp/` instead of
+  `vendor/line-desktop-mcp/`.
+- `tauri.conf.json`'s `bundle.resources` keys are bare
+  `vendor/line-desktop-mcp/src/server.js` (no `../`).
+
+Both stages now resolve identically:
+
+- **tauri-build** (build script, cwd = manifest-dir):
+  `Path::new("vendor/...").canonicalize()` → exists ✓.
+- **tauri-bundler** (cwd = manifest-dir, absolute):
+  `cwd.join("vendor/...")` → absolute path inside manifest-dir;
+  emitted verbatim to NSIS template.
+- **NSIS File directive** (cwd = `target/release/nsis/<arch>/`):
+  receives an absolute path, uses it directly. ✓.
+
+### Defensive CI step
+
+`.github/workflows/build-windows.yml` adds a step after
+`cargo tauri build` that greps the produced installer for
+`line-desktop-mcp`, `server.js`, `package.json`, and
+`npm-shrinkwrap.json`. If any marker is missing, the build fails —
+catching the "build succeeded but silently skipped resources" class
+of bug in CI instead of after a user install.
+
+### Files touched
+
+- `scripts/vendor-line-desktop-mcp.sh` — `DEST` moved to
+  `crates/line-hub-tauri/vendor/line-desktop-mcp/`
+- `crates/line-hub-tauri/tauri.conf.json` — `bundle.resources` keys
+  no longer use `../../` (they were `../../vendor/...` in v0.6.6)
+- `.gitignore` — also ignores `crates/*/vendor/` and `crates/**/vendor/`
+- `.github/workflows/build-windows.yml` — added "Verify bundled
+  resources landed in installer" step
+
+`installerHooks` stays at `../../nsis-hooks.nsh` (correct since v0.6.6 —
+manifest-dir relative, no change).
+
+24 lib tests pass. `cargo check` clean.
+
+
 ## [0.6.6] - 2026-09-14
 
 Hotfix for v0.6.5 NSIS bundling failure.
