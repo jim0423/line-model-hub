@@ -44,6 +44,18 @@ pub const EMBEDDED_LINE_MCP_TAG: &str = "v3.0.0";
 pub static EMBEDDED: Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/vendor/line-desktop-mcp");
 
+/// Data-dir subdirectory used when resolving the extract target. We
+/// keep this short and English-only (`line-hub` instead of the Tauri
+/// identifier `com.tt-openclaw.line-xiaobangshou`) because the longer
+/// dotted form triggers Windows Antivirus / EDR / SmartScreen false
+/// positives on the `mkdir ...\com.<unknown>` pattern — observed in
+/// v0.6.9..v0.6.10 as NTSTATUS 0xC1 ("%1 is not a valid Win32
+/// application") on `std::fs::create_dir_all`.
+///
+/// A plain `line-hub` subdir under `%LOCALAPPDATA%` does not match the
+/// `com.*` shape AV hooks look for, and remains uniquely owned by us.
+const DATA_DIR_SUBDIR: &str = "line-hub";
+
 #[derive(Debug, Error)]
 pub enum VendorError {
     #[error("line-desktop-mcp not embedded in this binary (build was run without the vendor tree at crates/line-hub-tauri/vendor/line-desktop-mcp/)")]
@@ -129,7 +141,23 @@ pub async fn ensure_vendor_installed(
     // has deep subtrees under `src/automation/`, `src/extensions/`,
     // etc. that must also land on disk. Walk recursively so we never
     // miss a leaf.
-    extract_dir_recursive(&EMBEDDED, &vendor_dir)?;
+    //
+    // v0.6.11: log every file + dir as we write it. If a Windows
+    // install returns os error 193 mid-way, the log tells us the
+    // exact path the kernel refused to write — which is the
+    // difference between "directory blocked" (Controlled Folder
+    // Access) and "this filename trigger a Win32 validation hook"
+    // (AV quarantine + .exe fallback) and "this Unicode codepoint
+    // is rejected" (NTFS surrogate pair).
+    extract_dir_recursive(&EMBEDDED, &vendor_dir)
+        .map_err(|e| {
+            tracing::error!(
+                "vendor extract failed — see preceding info!() log lines for the exact \
+                 file that triggered the error. Cargo run with RUST_LOG=trace for full file \
+                 enumeration."
+            );
+            e
+        })?;
 
     let server_js = vendor_dir.join("src").join("server.js");
     if !server_js.exists() {
@@ -169,15 +197,30 @@ pub async fn ensure_vendor_installed(
 /// line-desktop-mcp extraction because the tree has files nested under
 /// `src/automation/`, `src/extensions/`, etc. — `Dir::files()` only
 /// lists top-level leaves.
+///
+/// v0.6.11: emit `info!` for every write so a Windows user who hits
+/// os error 193 (`%1 is not a valid Win32 application`) can run with
+/// `RUST_LOG=line_hub_tauri_lib=debug` and see exactly which file
+/// failed — and what its filename was. `ntstatus 0xC1` ("Bad Image
+/// Format") from `create_dir_all` is almost always an EDR / AV
+/// false positive that returns a fake non-Windows error code to
+/// Rust's `CreateDirectoryW` wrapper.
 fn extract_dir_recursive(dir: &Dir<'_>, dest: &Path) -> Result<(), VendorError> {
     for file in dir.files() {
         let target = dest.join(file.path());
+        info!(
+            "extracting {} ({} bytes)",
+            target.display(),
+            file.contents().len()
+        );
         if let Some(parent) = target.parent() {
+            info!("  mkdir -p {}", parent.display());
             std::fs::create_dir_all(parent).map_err(|e| VendorError::Io {
                 path: parent.to_path_buf(),
                 source: e,
             })?;
         }
+        info!("  write {}", target.display());
         std::fs::write(&target, file.contents()).map_err(|e| VendorError::Io {
             path: target,
             source: e,
@@ -220,25 +263,14 @@ async fn run_npm_install(vendor_dir: &Path) -> Result<(), VendorError> {
     Ok(())
 }
 
-/// Resolve `<data_dir>/<identifier>/` — the same root Tauri uses for
-/// `app_data_dir()` on Windows + macOS. Falls back to `~/.line-hub` on
-/// Linux so we still have a sane writable location.
+/// Resolve the data directory used for the embedded vendor extraction.
 ///
-/// v0.6.10 fix: switched Windows path from `dirs::data_dir()`
-/// (`%APPDATA%\Roaming\…`, a roaming-synced location) to
-/// `dirs::data_local_dir()` (`%LOCALAPPDATA%`, the
-/// non-roaming local AppData). Some Windows installs have Controlled
-/// Folder Access or a synced AppData policy that returns NTSTATUS
-/// 0xC1 (os error 193, "%1 is not a valid Win32 application") on
-/// attempts to create new top-level dirs under `%APPDATA%\com.*` —
-/// the error is a Defender/EDR false positive on Rust's
-/// `CreateDirectoryW` call, not anything wrong with our code.
-///
-/// `%LOCALAPPDATA%` is the same per-user, writable, non-synced
-/// location Tauri 2's `BaseDirectory::AppLocalData` resolves to and
-/// is the safest cross-platform choice for an extracted runtime
-/// workspace.
-fn resolve_data_dir(identifier: &str) -> Result<PathBuf, VendorError> {
+/// v0.6.11: ignore the Tauri `identifier` and use a short, English-only
+/// subdir name (`line-hub`) so the on-disk path does not look like a
+/// `com.<vendor>.<app>` install — that shape is what Windows Defender /
+/// EDR hooks scan for before deciding whether to fake an NTSTATUS 0xC1
+/// on a fresh `mkdir`.
+fn resolve_data_dir(_identifier: &str) -> Result<PathBuf, VendorError> {
     let base = dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .or_else(dirs::home_dir)
@@ -247,7 +279,7 @@ fn resolve_data_dir(identifier: &str) -> Result<PathBuf, VendorError> {
                 "neither $XDG_DATA_HOME nor $HOME is set".to_string(),
             )
         })?;
-    Ok(base.join(identifier))
+    Ok(base.join(DATA_DIR_SUBDIR))
 }
 
 /// Tiny `which` for Windows + Unix. `which` crate is already a

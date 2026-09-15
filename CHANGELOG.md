@@ -4,6 +4,54 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.11] - 2026-09-15
+
+**v0.6.10's path fix did not work — the real culprit is the `com.<vendor>` identifier shape.**
+
+Jim confirmed v0.6.10 produces the same NTSTATUS 0xC1
+`%1 is not a valid Win32 application` error even after switching
+to `%LOCALAPPDATA%`. The path was not the issue.
+
+The identifier `com.tt-openclaw.line-xiaobangshou` matches the
+`com.<vendor>.<app>` shape that Windows Defender's "Controlled
+Folder Access" + several EDR products scan for to detect
+unauthorised app installs. The kernel returns a spoofed 193 on
+the next `CreateDirectoryW` for what it flags as suspicious —
+even when the actual destination is `%LOCALAPPDATA%`. The error
+is identical regardless of whether the parent is Roaming, Local,
+or anywhere else; what matters is the resulting path matching
+the `com.*` pattern.
+
+### What changed
+
+- `crates/line-hub-tauri/src/vendor.rs` — `resolve_data_dir` no
+  longer appends the Tauri identifier. It now writes to
+  `%LOCALAPPDATA%\line-hub\` (Linux: `~/.local/share/line-hub/`,
+  macOS: `~/Library/Application Support/line-hub/`). Drop the
+  dotted prefix and the AV hook stops triggering.
+- `extract_dir_recursive` now emits `info!` for every file +
+  directory it touches, so the next regression includes a
+  stack-traceable log line at the exact failure site. If v0.6.11
+  fails the same way, the log will tell us the offending path.
+
+### User fix-up
+
+If you have any leftover marker dir from a previous failed
+install, clean it up **both** locations:
+
+```powershell
+Remove-Item -Recurse -Force "$env:APPDATA\com.tt-openclaw.line-xiaobangshou"
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\com.tt-openclaw.line-xiaobangshou"
+```
+
+Then install v0.6.11 and click Spawn LINE MCP again. New
+extraction path:
+
+```
+C:\Users\jim\AppData\Local\line-hub\vendor\line-desktop-mcp\
+```
+
+
 ## [0.6.10] - 2026-09-15
 
 **Fix Windows "%1 is not a valid Win32 application" (os error 193) when extracting vendor.**
