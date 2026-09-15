@@ -290,13 +290,28 @@ async fn run_npm_install(vendor_dir: &Path) -> Result<(), VendorError> {
 fn resolve_data_dir(_identifier: &str) -> Result<PathBuf, VendorError> {
     let candidates = build_candidate_dirs();
     for cand in &candidates {
-        match std::fs::create_dir_all(cand) {
+        // v0.6.13: a successful mkdir is not enough — SmartScreen
+        // sometimes allows the directory creation but blocks the
+        // subsequent `File::create` inside it. We have to actually
+        // open a writable file to know if the location is truly
+        // usable for our purposes.
+        if let Err(e) = std::fs::create_dir_all(cand) {
+            tracing::warn!(
+                "candidate {} rejected on mkdir: {} — falling through",
+                cand.display(),
+                e
+            );
+            continue;
+        }
+        let canary = cand.join(format!(".line-hub-write-test-{}-{}", EMBEDDED_LINE_MCP_TAG, std::process::id()));
+        match std::fs::write(&canary, b"ok") {
             Ok(()) => {
+                let _ = std::fs::remove_file(&canary);
                 info!("vendor data dir: {}", cand.display());
                 return Ok(cand.clone());
             }
             Err(e) => tracing::warn!(
-                "candidate {} rejected by filesystem: {} — falling through",
+                "candidate {} rejects file write: {} — falling through",
                 cand.display(),
                 e
             ),
