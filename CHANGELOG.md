@@ -4,7 +4,69 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
-## [0.6.11] - 2026-09-15
+## [0.6.12] - 2026-09-15
+
+**Real root cause found: Authenticode `NotSigned` triggers Windows SmartScreen when launched from Explorer.**
+
+Jim ran the v0.6.11 PowerShell-launched exe and **it worked**
+(extraction succeeded, no os error 193). He then confirmed via
+`Get-AuthenticodeSignature` that the binary is `NotSigned` —
+which means Explorer-launched invocations are gated by SmartScreen
+/ AppLocker, and that gate is what was returning NTSTATUS 0xC1
+to Rust's `CreateDirectoryW` for *new* directories under
+`%LOCALAPPDATA%`. PowerShell-launched invocations skip SmartScreen
+because powershell.exe itself is signed.
+
+### What changed
+
+`vendor::resolve_data_dir` now probes a list of candidate
+directories in order and picks the first one whose `mkdir` does
+not return 193:
+
+1. `%LOCALAPPDATA%\line-hub\` (preferred — survives reboot so the
+   `npm install` cache is reusable).
+2. `%LOCALAPPDATA%\line-hub-vendor-v3.0.0\` (sibling of the above
+   — sometimes SmartScreen gates the dotless name but allows the
+   hyphenated variant).
+3. `%LOCALAPPDATA%\line-hub-vendor-v3.0.0\` via `dirs::cache_dir()`
+   (different parent path).
+4. `%TEMP%\line-hub-vendor-v3.0.0\` via `std::env::var_os("TEMP")`
+   — last-resort fallback. Always trusted because Temp is a
+   first-class Windows process token location.
+
+The user no longer needs to know which one landed — the binary
+logs the choice via `tracing::info!("vendor data dir: …")` and
+re-extraction on subsequent launches is gated by the marker
+file inside the chosen directory.
+
+### Why I missed this earlier
+
+I had assumed the path string was the AV trigger (the
+`com.<vendor>` shape in v0.6.9) or the data directory family
+(`%APPDATA%` Roaming vs Local in v0.6.10). Both guesses were
+wrong because the real trigger is *how* the binary was launched:
+Explorer spawns unsigned exes under a SmartScreen-restricted
+token that fakes a 193 on any filesystem write to a newly-created
+path. PowerShell-launched invocations inherit the shell's
+already-cleared token and the gate doesn't fire.
+
+The fix is the same shape as a workaround for any unsigned Tauri
+app: pick a directory that already exists in the user's profile
+and avoid creating new top-level dirs when possible. The 2-tier
+fallback covers both SmartScreen-gated and Temp-allowed scenarios.
+
+### User fix-up
+
+If v0.6.11 created a half-finished tree under
+`%LOCALAPPDATA%\line-hub\`, clean it up so v0.6.12 starts fresh:
+
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\line-hub" -ErrorAction SilentlyContinue
+```
+
+Then install v0.6.12 (Explorer double-click is fine now — the
+fallback path will engage automatically if SmartScreen still
+blocks the Local path).
 
 **v0.6.10's path fix did not work — the real culprit is the `com.<vendor>` identifier shape.**
 

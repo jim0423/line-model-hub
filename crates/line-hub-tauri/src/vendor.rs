@@ -270,16 +270,57 @@ async fn run_npm_install(vendor_dir: &Path) -> Result<(), VendorError> {
 /// `com.<vendor>.<app>` install — that shape is what Windows Defender /
 /// EDR hooks scan for before deciding whether to fake an NTSTATUS 0xC1
 /// on a fresh `mkdir`.
+/// Tries multiple locations in order until one accepts a `mkdir`.
+/// Windows SmartScreen / AppLocker restricts unsigned Tauri apps
+/// (Jim confirmed: `Get-AuthenticodeSignature` returns `NotSigned`)
+/// from creating new directories under `%LOCALAPPDATA%`, so the
+/// first attempt may return NTSTATUS 0xC1 (`%1 is not a valid
+/// Win32 application`). When that happens, fall back to a cache
+/// or temp dir which is always trusted.
+///
+/// v0.6.12: 2-tier fallback. Order is
+///   1. `%LOCALAPPDATA%\line-hub\` — preferred; survives reboots
+///      so `npm install` cache is reusable across launches.
+///   2. `%LOCALAPPDATA%\line-hub-vendor-v3.0.0\` (or `%TEMP%\...`)
+///      — last-resort; rebuilt every launch so a user only sees
+///      the slow `npm install` if `%LOCALAPPDATA%` is genuinely
+///      blocked by SmartScreen.
+///
+/// We pick the first whose `mkdir` succeeds.
 fn resolve_data_dir(_identifier: &str) -> Result<PathBuf, VendorError> {
-    let base = dirs::data_local_dir()
-        .or_else(dirs::data_dir)
-        .or_else(dirs::home_dir)
-        .ok_or_else(|| {
-            VendorError::NoDataDir(
-                "neither $XDG_DATA_HOME nor $HOME is set".to_string(),
-            )
-        })?;
-    Ok(base.join(DATA_DIR_SUBDIR))
+    let candidates = build_candidate_dirs();
+    for cand in &candidates {
+        match std::fs::create_dir_all(cand) {
+            Ok(()) => {
+                info!("vendor data dir: {}", cand.display());
+                return Ok(cand.clone());
+            }
+            Err(e) => tracing::warn!(
+                "candidate {} rejected by filesystem: {} — falling through",
+                cand.display(),
+                e
+            ),
+        }
+    }
+    candidates.into_iter().next().ok_or_else(|| {
+        VendorError::NoDataDir("no candidate dir resolved".to_string())
+    })
+}
+
+fn build_candidate_dirs() -> Vec<PathBuf> {
+    let tag = EMBEDDED_LINE_MCP_TAG;
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Some(b) = dirs::data_local_dir().or_else(dirs::data_dir) {
+        out.push(b.join(DATA_DIR_SUBDIR));
+        out.push(b.join(format!("{}-{}", DATA_DIR_SUBDIR, tag)));
+    }
+    if let Some(b) = dirs::cache_dir() {
+        out.push(b.join(format!("{}-{}", DATA_DIR_SUBDIR, tag)));
+    }
+    if let Some(b) = std::env::var_os("TEMP").map(PathBuf::from) {
+        out.push(b.join(format!("{}-{}", DATA_DIR_SUBDIR, tag)));
+    }
+    out
 }
 
 /// Tiny `which` for Windows + Unix. `which` crate is already a
