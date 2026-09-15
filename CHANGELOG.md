@@ -4,6 +4,50 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.10] - 2026-09-15
+
+**Fix Windows "%1 is not a valid Win32 application" (os error 193) when extracting vendor.**
+
+Jim installed v0.6.9 and clicked Spawn LINE MCP, but the
+`vendor::ensure_vendor_installed()` step failed with:
+
+```
+vendor extract failed: io error writing vendor tree to
+  C:\Users\jim\AppData\Roaming\com.tt-openclaw.line-xiaobangshou\vendor\line-desktop-mcp:
+  %1 不是有效的 Win32 應用程式。 (os error 193)
+```
+
+`%APPDATA%\Roaming\` is the wrong home for an extracted runtime
+workspace on a typical Windows install — Controlled Folder Access
+(Defender) or a syncing policy treats `%APPDATA%\com.<unknown>` as
+suspicious and blocks the `CreateDirectoryW` call with NTSTATUS 0xC1.
+The error surfaces from Rust's `std::fs::create_dir_all` with no
+hint that it's actually a Defender false positive.
+
+### What changed
+
+- `crates/line-hub-tauri/src/vendor.rs::resolve_data_dir` — switched
+  primary path from `dirs::data_dir()` (Roaming) to
+  `dirs::data_local_dir()` (Local). The new path lands at
+  `%LOCALAPPDATA%\com.tt-openclaw.line-xiaobangshou\vendor\...` and
+  is the same per-user writable location Tauri 2's
+  `BaseDirectory::AppLocalData` resolves to.
+- v0.6.9 marker at `%APPDATA%\...` is irrelevant — the new path
+  starts fresh so the very first launch on a v0.6.9 install goes
+  straight through the extraction path with no caching shortcut.
+
+### User fix-up needed (one-time only)
+
+If you hit this error on v0.6.9, manually remove the broken marker:
+
+```powershell
+Remove-Item -Recurse -Force "$env:APPDATA\com.tt-openclaw.line-xiaobangshou"
+```
+
+Then install v0.6.10 and click Spawn LINE MCP again. Extraction now
+goes to `%LOCALAPPDATA%` and should succeed.
+
+
 ## [0.6.9] - 2026-09-15
 
 **Shrink the installer by 65 MB — drop `doc_media/` from the vendor tree.**

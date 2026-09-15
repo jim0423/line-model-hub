@@ -223,8 +223,24 @@ async fn run_npm_install(vendor_dir: &Path) -> Result<(), VendorError> {
 /// Resolve `<data_dir>/<identifier>/` — the same root Tauri uses for
 /// `app_data_dir()` on Windows + macOS. Falls back to `~/.line-hub` on
 /// Linux so we still have a sane writable location.
+///
+/// v0.6.10 fix: switched Windows path from `dirs::data_dir()`
+/// (`%APPDATA%\Roaming\…`, a roaming-synced location) to
+/// `dirs::data_local_dir()` (`%LOCALAPPDATA%`, the
+/// non-roaming local AppData). Some Windows installs have Controlled
+/// Folder Access or a synced AppData policy that returns NTSTATUS
+/// 0xC1 (os error 193, "%1 is not a valid Win32 application") on
+/// attempts to create new top-level dirs under `%APPDATA%\com.*` —
+/// the error is a Defender/EDR false positive on Rust's
+/// `CreateDirectoryW` call, not anything wrong with our code.
+///
+/// `%LOCALAPPDATA%` is the same per-user, writable, non-synced
+/// location Tauri 2's `BaseDirectory::AppLocalData` resolves to and
+/// is the safest cross-platform choice for an extracted runtime
+/// workspace.
 fn resolve_data_dir(identifier: &str) -> Result<PathBuf, VendorError> {
-    let base = dirs::data_dir()
+    let base = dirs::data_local_dir()
+        .or_else(dirs::data_dir)
         .or_else(dirs::home_dir)
         .ok_or_else(|| {
             VendorError::NoDataDir(
