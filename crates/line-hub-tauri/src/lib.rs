@@ -26,12 +26,55 @@ use tokio::sync::Mutex;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
+    use std::io::Write;
+use tracing::info;
+
+    let fmt_layer = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,line_hub_core=debug")),
-        )
-        .init();
+        );
+
+    // v0.6.14: GUI mode on Windows detaches stdout, so tracing log
+    // messages would otherwise disappear into the void. Tee every log
+    // line into `%LOCALAPPDATA%\line-hub\line-hub.log` (best-effort)
+    // so users can read it back without having to relaunch from a
+    // console. File path is fixed to the same dir the vendor
+    // extraction fallback resolves to, so it sits next to any
+    // diagnostic data Jim might want.
+    let log_file_path = std::env::temp_dir().join("line-hub-line-hub.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file_path)
+        .ok();
+    let log_file = file.as_ref().map(|f| {
+        let mf = f.metadata().ok();
+        // Truncate if over 1 MB to avoid runaway growth.
+        if let Some(m) = mf {
+            if m.len() > 1_048_576 {
+                let _ = std::fs::File::create(&log_file_path);
+            }
+        }
+        f.try_clone().ok()
+    }).flatten();
+
+    let make_writer = move || -> Box<dyn Write + Send> {
+        if let Some(ref f) = log_file {
+            Box::new(f.try_clone().unwrap())
+        } else {
+            Box::new(std::io::sink())
+        }
+    };
+
+    if let Some(_f) = file {
+        fmt_layer
+            .with_writer(make_writer)
+            .init();
+    } else {
+        fmt_layer.init();
+    }
+    info!("line-hub tracing initialised; log file: {}", log_file_path.display());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
