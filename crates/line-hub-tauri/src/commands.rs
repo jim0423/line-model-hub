@@ -382,17 +382,28 @@ pub async fn get_local_only(
 }
 
 #[tauri::command]
-pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<ToolDefinition>, String> {
+pub async fn spawn_mcp(
+    app: AppHandle,
+    state: State<'_, Arc<Mutex<AppState>>>,
+) -> Result<Vec<ToolDefinition>, String> {
     use line_hub_core::config::HubConfig;
 
-    // Resolve the line-desktop-mcp entry path with this priority:
-    //   1. `HUB_LINE_MCP_PATH` env var (CI / silent installs)
-    //   2. `line_mcp_path` saved in HubConfig (the Settings dialog field)
-    //   3. `LINE_MODEL_HUB_BUNDLED` env var pointing at a bundled install dir
-    //      (the installer ships node_modules under resources/line-mcp/)
+    // v0.6.8: resolve the line-desktop-mcp entry path with four tiers,
+    // highest priority first:
     //
-    // If none of the three are set, we surface a *human-readable* error to the
-    // UI rather than the cryptic env-var hint.
+    //   1. `HUB_LINE_MCP_PATH` env var — CI smoke tests + power-users.
+    //   2. `line_mcp_path` saved in HubConfig (Settings dialog field).
+    //   3. `LINE_MODEL_HUB_BUNDLED` env var → `src/server.js` — for dev
+    //      who happen to have the source tree checked out somewhere
+    //      outside the installer's data dir.
+    //   4. `crate::vendor::ensure_vendor_installed()` — extracts the
+    //      embedded source tree baked into the exe by `build.rs` on first
+    //      launch and runs `npm install` once per machine.
+    //
+    // Tiers 3 and 4 historically failed because the NSIS bundler
+    // silently dropped `bundle.resources` (verified in CI run
+    // 34828069067 log line 1465). Embedding in build.rs and unpacking
+    // on first launch sidesteps the bundler entirely.
     let cfg = HubConfig::load().await.ok();
     let configured_path = cfg.as_ref().and_then(|c| c.line_mcp_path.clone());
 
@@ -410,11 +421,31 @@ pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<Too
                         .into_owned()
                 })
         })
+        .or_else(|| {
+            // Last resort: extract the embedded vendor tree to a
+            // per-user data dir and run npm install there.
+            let identifier = app.config().identifier.clone();
+            Some(candidate_vendor_path(identifier))
+        })
         .ok_or_else(|| {
             "Cannot find line-desktop-mcp. Open Settings and paste the path to \
              line-desktop-mcp\\src\\server.js (or set HUB_LINE_MCP_PATH)."
                 .to_string()
         })?;
+
+    let resolved_path = if std::path::Path::new(&path).exists() {
+        // Tiers 1-3 already point at a real file on disk — use as-is.
+        path
+    } else {
+        // Tier 4 marker: paths ending in `<...>/src/server.js` that do
+        // not yet exist on disk trigger the vendor-extract flow.
+        let identifier = app.config().identifier.clone();
+        crate::vendor::ensure_vendor_installed(&identifier)
+            .await
+            .map_err(|e| format!("vendor extract failed: {e}"))?
+            .to_string_lossy()
+            .into_owned()
+    };
 
     let node = which_node().ok_or_else(|| {
         "node.exe not found in PATH. Install Node.js from https://nodejs.org/ \
@@ -423,7 +454,7 @@ pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<Too
     })?;
     let mcp = McpClient::spawn(
         &node,
-        &path,
+        &resolved_path,
         &[
             ("LINE_MCP_EXTENSIONS", "1"),
             ("LINE_MCP_SKIP_POSTINSTALL", "1"),
@@ -435,6 +466,20 @@ pub async fn spawn_mcp(state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<Too
     let mut st = state.lock().await;
     *st.mcp.write().await = Some(Arc::new(mcp) as Arc<dyn McpTool>);
     Ok(tools)
+}
+
+/// Stand-in path used solely so `or_else(|| Some(...))` above can pick
+/// the vendor branch. The actual on-disk resolution happens in
+/// `spawn_mcp` once we know whether the path already exists.
+fn candidate_vendor_path(_identifier: String) -> String {
+    // Sentinel: spawn_mcp checks `Path::new(&path).exists()` before
+    // returning; this value never reaches McpClient.
+    std::path::Path::new("vendor")
+        .join("line-desktop-mcp")
+        .join("src")
+        .join("server.js")
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[tauri::command]

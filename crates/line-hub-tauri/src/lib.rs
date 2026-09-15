@@ -17,6 +17,7 @@
 mod commands;
 mod respawn;
 mod state;
+pub mod vendor;
 
 use state::AppState;
 use std::sync::Arc;

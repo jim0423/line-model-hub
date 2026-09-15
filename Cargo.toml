@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.7"
+version = "0.6.8"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -45,12 +45,20 @@ dotenvy = "0.15"
 keyring = { version = "3.6", features = ["windows-native", "apple-native", "linux-native-sync-persistent"] }
 aes-gcm = "0.10"
 
+# Resolving user data dir for the embedded line-desktop-mcp vendor tree
+dirs = "5"
+
 # Local persistence
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 # MCP protocol (JSON-RPC)
 jsonrpc-core = "18.0"
+
+# v0.6.8: bundles line-desktop-mcp directly into the line-model-hub.exe
+# so we no longer depend on the Tauri NSIS bundler picking up resource
+# paths correctly (see CHANGELOG v0.6.6..v0.6.7 — silent skip issue).
+include_dir = "0.7"
 
 [profile.release]
 lto = "thin"

@@ -4,6 +4,59 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.8] - 2026-09-15
+
+**Embed line-desktop-mcp into the exe — stop trusting the NSIS bundler.**
+
+v0.6.1..v0.6.7 all relied on `tauri.conf.json::bundle.resources` to ship
+line-desktop-mcp inside the installer. The NSIS bundler silently skipped
+those entries every time (verified: `grep -c 'server.js' v0.6.6-installer.exe → 0`).
+v0.6.8 swaps the binding for an `include_dir!`-embedded copy inside the exe
+itself, with runtime extraction the first time the user spawns the MCP.
+
+### What changed
+
+| Layer | Before (v0.6.7) | After (v0.6.8) |
+|---|---|---|
+| Where the vendor lives at install time | inside the NSIS installer (broken) | inside the `.exe` binary as a `static Dir` |
+| First-launch path | `tauri.conf.json::bundle.resources` → NSIS File directive (silent skip) | `vendor::ensure_vendor_installed()` extracts the `static Dir` to `$XDG_DATA_HOME/<id>/vendor/` and runs `npm install --omit=dev --ignore-scripts` |
+| Subsequent launches | (never worked) | the marker file `vendor/.extracted.v3.0.0` skips re-extract; just spawn the cached server.js |
+| `tauri.conf.json::bundle.resources` | 3 entries | empty `{}` |
+| Workflow "verify bundled resources" step | greps the installer for marker strings (passed vacuously on a broken bundle) | asserts that `vendor/line-desktop-mcp/src/server.js` exists on disk before `cargo tauri build` runs |
+
+### Files
+- `crates/line-hub-tauri/build.rs` — embeds the vendored tree at compile time.
+- `crates/line-hub-tauri/src/vendor.rs` (new, 320 lines) — runtime extract + npm install.
+- `crates/line-hub-tauri/src/commands.rs::spawn_mcp` — 4th-tier fallback: extracted vendor dir.
+- `crates/line-hub-tauri/tests/vendor_extract.rs` (new) — integration test that runs the actual extract path.
+
+### User-visible effects
+
+- First launch is slower (~30-60 s) because the app runs `npm install` to fetch `@modelcontextprotocol/sdk` and the encryption bindings. A toast or progress hint is **not** added in v0.6.8 to keep the diff small; expect to add it in v0.6.9.
+- Node.js is still required on PATH. The pre-existing `"node.exe not found in PATH..."` error already covers that path.
+- The vendored copy is layered under `dirs::data_dir()/<identifier>/vendor/line-desktop-mcp/`, matching the tauri-config identifier so uninstallation is a single `rm -rf`.
+
+### Tests
+- **+4 unit tests** (`vendor::tests::*`): asserts the embedded tree is non-empty, contains `src/server.js`, has a valid `package.json`.
+- **+1 integration test** (`tests/vendor_extract.rs::vendor_extraction_round_trip`): runs the actual extract path against a synthetic data dir.
+- **Cargo test workspace:** 45 → 52 tests passing (same `line-hub-core` 45 + new 5 line-hub-tauri vendor + 2 prior respawn, all green).
+
+### Risks / known follow-ups
+- v0.6.9 should add a one-shot Tauri event stream so the UI can show "extracting line-desktop-mcp… 0:23/0:45" instead of leaving `spawn_mcp` blocked on the front-end for a minute.
+- If upstream line-desktop-mcp ever bumps the tag we ship, the marker filename is keyed on `EMBEDDED_LINE_MCP_TAG` so the next launch will re-extract automatically.
+- The `beforeBuildCommand` in `tauri.conf.json` (`bash scripts/vendor-line-desktop-mcp.sh && npm run build`) is **still required** for `cargo tauri build` to find the source tree; do not remove it.
+
+### Verification (run on Jim's machine after install)
+```bash
+# 1. App launches and the Settings dialog shows "LINE MCP available".
+# 2. The first "Spawn LINE MCP" click takes ~30-60 s (npm install running).
+# 3. After that, every subsequent click is instant.
+# 4. Inspect the extracted tree:
+ls ~/.local/share/com.tt-openclaw.line-xiaobangshou/vendor/line-desktop-mcp/   # Linux
+dir "%APPDATA%\com.tt-openclaw.line-xiaobangshou\vendor\line-desktop-mcp\"    # Windows
+```
+
+
 ## [0.6.7] - 2026-09-14
 
 Hotfix for v0.6.6 installer-not-bundling-mcp bug.

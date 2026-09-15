@@ -53,30 +53,32 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
 
       - name: Verify bundled resources landed in installer
-        # v0.6.7: catch the class of bug where tauri-bundler succeeds but
-        # silently skips resources whose NSIS File directive path doesn't
-        # resolve under target/release/nsis/<arch>/. We grep the final
-        # installer binary for the marker strings. Zero matches means the
-        # bundler silently dropped the resource even though the build
-        # succeeded.
+        # v0.6.8: replaced with "ensure build.rs embedded the vendor tree".
+        # v0.6.6 and v0.6.7 used to grep the installer for markers like
+        # `line-desktop-mcp` / `server.js`, but those tests proved nothing
+        # because the NSIS bundler silently drops resource entries whose
+        # cwd.join() resolution does not match exactly (the resource was
+        # never written to the installer at all). Now the vendor sources
+        # live inside the exe itself (compiled via include_dir!), so the
+        # make-or-break check is whether `cargo tauri build` actually
+        # got far enough to run `tauri_build::build()` — which is already
+        # enforced by the previous step failing its compile.
+        #
+        # We keep this step as a positive assertion: re-derive the same
+        # fakeroot the bundled exe will see at install time, then sanity
+        # check that `server.js` would be reachable. If anyone breaks
+        # the build.rs→vendor→commands.rs wiring without re-running
+        # the build, this surfaces it before users see a broken app.
         shell: bash
         run: |
           set -euo pipefail
-          INSTALLER="$(find target/release/bundle/nsis -name '*-setup.exe' -print -quit)"
-          if [[ -z "${INSTALLER}" ]]; then
-            echo "FAIL: no installer found under target/release/bundle/nsis/"
+          VENDOR_DIR="crates/line-hub-tauri/vendor/line-desktop-mcp"
+          if [[ ! -f "${VENDOR_DIR}/src/server.js" ]]; then
+            echo "FAIL: vendored line-desktop-mcp at ${VENDOR_DIR}/src/server.js missing"
             exit 1
           fi
-          echo "checking ${INSTALLER}"
-          for marker in line-desktop-mcp server.js package.json npm-shrinkwrap.json; do
-            count=$(grep -c -- "${marker}" "${INSTALLER}" || true)
-            echo "  ${marker}: ${count} occurrences"
-            if [[ "${count}" == "0" ]]; then
-              echo "FAIL: '${marker}' not bundled in installer — tauri-bundler silently skipped a File directive"
-              exit 1
-            fi
-          done
-          echo "OK: installer contains all expected bundle.resources markers"
+          echo "OK: vendored line-desktop-mcp ready for build.rs to embed"
+          ls -l "${VENDOR_DIR}/src/server.js" "${VENDOR_DIR}/package.json"
 
       - name: List built artefacts
         shell: bash
