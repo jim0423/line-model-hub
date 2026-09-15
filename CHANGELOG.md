@@ -4,6 +4,32 @@ All notable changes to Line 小幫手 are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.9] - 2026-09-15
+
+**Shrink the installer by 65 MB — drop `doc_media/` from the vendor tree.**
+
+v0.6.8 shipped a 68.67 MB NSIS installer and 82.96 MB portable exe
+because the vendored line-desktop-mcp `doc_media/` folder carries
+two demo GIFs at 34 MB and 30 MB. The GIFs are rendered in the
+upstream README, not loaded at runtime, so they have no business
+inside the embedded binary.
+
+### What changed
+
+- `scripts/vendor-line-desktop-mcp.sh` — prune `doc_media/` (demo GIFs)
+  and top-level `test/` (Mocha test scripts) alongside the existing
+  `.git`, `.github`, `tests/`, `docs/`, `README.md` removal.
+- Embedded file count: 70 → 38. Embedded byte count: ~68 MB → ~700 KB.
+- `crates/line-hub-tauri/src/vendor.rs::tests::embedded_vendor_is_non_empty`
+  threshold relaxed from >30 to >20 files so the post-prune tree still
+  passes.
+
+### Verification
+The CI run for tag `v0.6.9` is what you should install, not
+`v0.6.8`. The `v0.6.8` installer is functionally correct (vendor
+extraction works) but is ~10× the size it needs to be.
+
+
 ## [0.6.8] - 2026-09-15
 
 **Embed line-desktop-mcp into the exe — stop trusting the NSIS bundler.**

@@ -62,11 +62,16 @@ rm -rf "${DEST}"
 mv "${DEST}.tmp" "${DEST}"
 
 # Drop anything we do not need inside the installer — git history, dev
-# configs, GH Actions. Stays under ~5 MB.
+# configs, GH Actions, screenshots. Also drop `doc_media/` which contains
+# ~65 MB of demo GIFs that bloat the embedded binary; they are not
+# needed at runtime (only useful for README rendering on the upstream
+# repo). Stays around ~3 MB without node_modules.
 rm -rf "${DEST}/.git"
 rm -rf "${DEST}/.github"
 rm -rf "${DEST}/tests" 2>/dev/null || true
 rm -rf "${DEST}/docs"   2>/dev/null || true
+rm -rf "${DEST}/doc_media" 2>/dev/null || true
+rm -rf "${DEST}/test"   2>/dev/null || true  # Top-level test scripts (line-ui.test.mjs etc.)
 rm -f  "${DEST}/.gitignore"
 rm -f  "${DEST}/.npmignore" 2>/dev/null || true
 rm -f  "${DEST}/README.md" 2>/dev/null || true

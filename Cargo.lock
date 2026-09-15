@@ -2249,7 +2249,7 @@ dependencies = [
 
 [[package]]
 name = "line-hub-core"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2279,7 +2279,7 @@ dependencies = [
 
 [[package]]
 name = "line-hub-mcp"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-trait",
  "futures",
@@ -2293,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "line-hub-tauri"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

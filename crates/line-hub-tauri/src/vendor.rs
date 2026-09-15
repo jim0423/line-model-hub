@@ -277,14 +277,18 @@ mod tests {
         // Sentinel — if build.rs ever fails to populate the vendor tree
         // locally, this test catches it before shipping a broken exe.
         let total = count_files_recursive(&EMBEDDED);
-        // line-desktop-mcp v3.0.0 ships ~70 files across automation,
-        // extensions, scripts, and root; we allow some headroom for
-        // upstream restructuring but require >30 to catch a fresh,
-        // empty checkout.
+        // After vendor-line-desktop-mcp.sh prunes .git, .github, tests/,
+        // docs/, doc_media/ (demo GIFs ~65 MB), test/, README, etc.,
+        // the embedded tree holds the runtime essentials: package.json,
+        // npm-shrinkwrap.json, src/ with all subdirs (automation,
+        // extensions), and the entry scripts. We assert >20 files
+        // to catch a fresh, empty checkout or a pruning regression
+        // (v0.6.8 shipped at 70 files before the doc_media prune).
         assert!(
-            total > 30,
-            "expected embedded line-desktop-mcp to contain >30 files (recursive), \
-             only {} found",
+            total > 20,
+            "expected embedded line-desktop-mcp to contain >20 files (recursive), \
+             only {} found — is crates/line-hub-tauri/vendor/line-desktop-mcp/ \
+             populated?",
             total
         );
     }
